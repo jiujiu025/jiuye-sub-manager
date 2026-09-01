@@ -31,6 +31,7 @@ class PackageRepository:
         self,
         *,
         name: str,
+        subscription_name: str | None,
         enabled: bool,
         description: str | None,
         token_hash: str,
@@ -39,6 +40,7 @@ class PackageRepository:
     ) -> Package:
         package = Package(
             name=name,
+            subscription_name=subscription_name,
             enabled=enabled,
             description=description,
             token_hash=token_hash,

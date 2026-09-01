@@ -71,7 +71,9 @@ class SubscriptionService:
             for preview in previews
             if preview.id in node_by_id
         ]
-        yaml_text = ClashExporter().export(items)
+        yaml_text = ClashExporter().export(
+            items, subscription_name=package.subscription_name or package.name
+        )
         return yaml_text, len(items)
 
     def log_subscription(

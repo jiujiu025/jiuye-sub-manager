@@ -21,6 +21,7 @@ from app.schemas.package import (
 )
 from app.services.package_service import (
     PackageService,
+    display_subscription_name,
     subscription_url,
     subscription_url_for_package,
 )
@@ -51,6 +52,7 @@ def list_packages(
     for package in packages:
         summary = PackageSummary.model_validate(package)
         summary.subscription_url = subscription_url_for_package(package)
+        summary.subscription_name = display_subscription_name(package)
         summaries.append(summary)
     return summaries
 

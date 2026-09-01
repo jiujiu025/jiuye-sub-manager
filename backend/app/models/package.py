@@ -15,6 +15,7 @@ class Package(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    subscription_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)

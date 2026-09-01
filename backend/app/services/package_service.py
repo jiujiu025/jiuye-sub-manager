@@ -54,6 +54,12 @@ def subscription_url_for_package(package: Package) -> str | None:
     return subscription_url(token)
 
 
+def display_subscription_name(package: Package) -> str:
+    """订阅显示名称：未设置时回退到套餐名称。"""
+
+    return package.subscription_name or package.name
+
+
 class PackageService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -69,6 +75,7 @@ class PackageService:
         token = generate_subscription_token()
         package = self.repo.create(
             name=payload.name,
+            subscription_name=payload.subscription_name or payload.name,
             enabled=payload.enabled,
             description=payload.description,
             token_hash=hash_subscription_token(token),
@@ -99,6 +106,9 @@ class PackageService:
             if self.repo.get_by_name(data["name"]) is not None:
                 raise BusinessError("套餐名称已存在")
         for key, value in data.items():
+            if key == "subscription_name" and value in (None, ""):
+                setattr(package, key, None)
+                continue
             setattr(package, key, value)
         if rules_payload is not None:
             self._update_rules(package, PackageRulesPayload(**rules_payload))
@@ -200,6 +210,7 @@ class PackageService:
         return PackageDetail(
             id=package.id,
             name=package.name,
+            subscription_name=display_subscription_name(package),
             enabled=package.enabled,
             description=package.description,
             token_prefix=package.token_prefix,

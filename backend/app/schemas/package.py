@@ -22,6 +22,7 @@ class PackageRulesPayload(BaseModel):
 
 class PackageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
+    subscription_name: str | None = Field(default=None, max_length=128)
     enabled: bool = True
     description: str | None = None
     rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
@@ -29,6 +30,7 @@ class PackageCreate(BaseModel):
 
 class PackageUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
+    subscription_name: str | None = Field(default=None, max_length=128)
     enabled: bool | None = None
     description: str | None = None
     rules: PackageRulesPayload | None = None
@@ -39,6 +41,7 @@ class PackageSummary(BaseModel):
 
     id: int
     name: str
+    subscription_name: str | None = None
     enabled: bool
     description: str | None
     token_prefix: str

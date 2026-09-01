@@ -7,6 +7,7 @@
 
     <el-table :data="packages" v-loading="loading">
       <el-table-column prop="name" label="套餐名称" min-width="140" />
+      <el-table-column prop="subscription_name" label="订阅显示名称" min-width="140" />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag :type="row.enabled ? 'success' : 'info'">
@@ -51,6 +52,9 @@
       <el-form label-width="110px">
         <el-form-item label="名称">
           <el-input v-model="form.name" />
+        </el-form-item>
+        <el-form-item label="订阅显示名称">
+          <el-input v-model="form.subscription_name" placeholder="留空默认使用套餐名称" />
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="form.description" />
@@ -140,6 +144,7 @@ const renameJson = ref('[]')
 const sortJson = ref('[]')
 const form = reactive({
   name: '',
+  subscription_name: '',
   description: '',
   enabled: true,
   rules: {
@@ -203,6 +208,7 @@ async function openEdit(row) {
   const { data } = await getPackage(row.id)
   Object.assign(form, {
     name: data.name,
+    subscription_name: data.subscription_name || '',
     description: data.description || '',
     enabled: data.enabled,
     rules: {

@@ -11,9 +11,16 @@ from app.models.node import Node
 class ClashExporter(BaseExporter):
     """生成只包含解析后节点的 Clash/Mihomo proxies 配置。"""
 
-    def export(self, items: list[tuple[Node, str]]) -> str:
+    def export(
+        self,
+        items: list[tuple[Node, str]],
+        subscription_name: str | None = None,
+    ) -> str:
         proxies = [self._to_proxy(node, name) for node, name in items]
-        data = {"proxies": proxies}
+        data: dict = {}
+        if subscription_name:
+            data["sub-name"] = subscription_name
+        data["proxies"] = proxies
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
     @staticmethod
