@@ -15,6 +15,12 @@
         </template>
       </el-table-column>
       <el-table-column prop="token_prefix" label="Token 前缀" width="120" />
+      <el-table-column label="订阅地址" min-width="220" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.subscription_url">{{ row.subscription_url }}</span>
+          <span v-else class="muted">重新生成 Token 后可见</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
       <el-table-column label="创建时间" width="170">
         <template #default="{ row }">
@@ -24,6 +30,13 @@
       <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button
+            size="small"
+            :disabled="!row.subscription_url"
+            @click="copyUrl(row)"
+          >
+            复制地址
+          </el-button>
           <el-button size="small" @click="preview(row)">预览</el-button>
           <el-button size="small" @click="regenerate(row)">刷新 Token</el-button>
           <el-button size="small" :type="row.enabled ? 'warning' : 'success'" @click="toggle(row)">
@@ -227,6 +240,7 @@ async function save() {
         '套餐已创建（Token 仅显示一次）',
         { confirmButtonText: '我已保存' }
       )
+      await load()
     }
     dialogVisible.value = false
     ElMessage.success('保存成功')
@@ -244,6 +258,15 @@ async function regenerate(row) {
     { confirmButtonText: '我已保存' }
   )
   await load()
+}
+
+async function copyUrl(row) {
+  try {
+    await navigator.clipboard.writeText(row.subscription_url)
+    ElMessage.success('订阅地址已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 
 async function toggle(row) {
@@ -282,5 +305,9 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.muted {
+  color: #9ca3af;
 }
 </style>

@@ -110,6 +110,48 @@ docker compose up -d --build
 - 订阅 Token 仅在创建/重生成时显示一次，数据库只保存哈希
 - 生产环境日志会过滤 UUID、密码、完整 VLESS URL、上游 URL、Token
 
+## 系统设置
+
+后台「系统设置」页面可修改：
+
+- 自动同步间隔（分钟）
+- 定时同步开关
+- 订阅缓存 TTL（秒）
+- 节点来源去重优先级（自有节点始终最高）
+
+以上设置保存后立即生效。JWT 密钥、管理员密码、HTTP 超时等配置需要修改 `.env` 后重启服务。
+
+## 数据库备份与恢复
+
+备份（自动带时间戳，输出到 `data/backups/`）：
+
+```powershell
+cd backend
+python scripts/backup_db.py
+```
+
+Docker 环境：
+
+```bash
+docker compose exec api python scripts/backup_db.py
+```
+
+恢复（恢复前会自动备份一次当前数据库）：
+
+```powershell
+cd backend
+python scripts/restore_db.py data/backups/sub_manager_20260901_120000.db
+```
+
+Docker 环境（建议先 `docker compose stop api` 再恢复）：
+
+```bash
+docker compose exec api python scripts/restore_db.py /app/data/backups/sub_manager_20260901_120000.db
+docker compose start api
+```
+
+日志文件已启用滚动轮转（单个 5MB，保留 5 份），Docker 部署时 `logs/` 目录挂载在命名卷中，容器重建不会丢失。
+
 ## 测试
 
 ```powershell

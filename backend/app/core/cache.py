@@ -36,5 +36,10 @@ class CacheService:
 
         self._cache.clear()
 
+    def reconfigure(self, ttl_seconds: int) -> None:
+        """按新 TTL 重建缓存，旧缓存立即失效。"""
+
+        self._cache = TTLCache(maxsize=1024, ttl=ttl_seconds)
+
 
 cache_service = CacheService()

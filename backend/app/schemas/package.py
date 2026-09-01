@@ -42,6 +42,7 @@ class PackageSummary(BaseModel):
     enabled: bool
     description: str | None
     token_prefix: str
+    subscription_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

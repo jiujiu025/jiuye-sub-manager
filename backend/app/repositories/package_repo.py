@@ -35,6 +35,7 @@ class PackageRepository:
         description: str | None,
         token_hash: str,
         token_prefix: str,
+        token_encrypted: str,
     ) -> Package:
         package = Package(
             name=name,
@@ -42,6 +43,7 @@ class PackageRepository:
             description=description,
             token_hash=token_hash,
             token_prefix=token_prefix,
+            token_encrypted=token_encrypted,
         )
         self.db.add(package)
         return package

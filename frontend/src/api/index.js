@@ -31,3 +31,6 @@ export const togglePackage = (id) => client.post(`/packages/${id}/toggle`)
 export const previewPackage = (id) => client.get(`/packages/${id}/preview`)
 
 export const getLogs = (params) => client.get('/logs', { params })
+
+export const getSystemSettings = () => client.get('/system/settings')
+export const updateSystemSettings = (data) => client.put('/system/settings', data)

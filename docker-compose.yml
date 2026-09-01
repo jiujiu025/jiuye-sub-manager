@@ -9,6 +9,7 @@ services:
       - DATABASE_URL=sqlite:////app/data/sub_manager.db
     volumes:
       - sub_manager_data:/app/data
+      - sub_manager_logs:/app/logs
     expose:
       - "8000"
 
@@ -26,3 +27,4 @@ services:
 
 volumes:
   sub_manager_data:
+  sub_manager_logs:

@@ -6,6 +6,8 @@ import SourcesView from '../views/SourcesView.vue'
 import NodesView from '../views/NodesView.vue'
 import PackagesView from '../views/PackagesView.vue'
 import LogsView from '../views/LogsView.vue'
+import SystemSettingsView from '../views/SystemSettingsView.vue'
+import ProfileView from '../views/ProfileView.vue'
 
 const routes = [
   { path: '/login', component: LoginView },
@@ -13,7 +15,9 @@ const routes = [
   { path: '/sources', component: SourcesView, meta: { auth: true } },
   { path: '/nodes', component: NodesView, meta: { auth: true } },
   { path: '/packages', component: PackagesView, meta: { auth: true } },
-  { path: '/logs', component: LogsView, meta: { auth: true } }
+  { path: '/logs', component: LogsView, meta: { auth: true } },
+  { path: '/settings', component: SystemSettingsView, meta: { auth: true } },
+  { path: '/profile', component: ProfileView, meta: { auth: true } }
 ]
 
 const router = createRouter({

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import yaml
+
 from app.exporters.clash import ClashExporter
 from app.models.node import Node
 from app.utils.fingerprint import build_node_fingerprint
@@ -101,3 +103,50 @@ def test_export_never_exposes_upstream_url() -> None:
     assert "proxy-providers" not in yaml_text
     assert "secret-provider" not in yaml_text
     assert "/sub/abc" not in yaml_text
+
+
+def test_export_yaml_is_valid_mihomo_config() -> None:
+    """生成的 YAML 应能被安全解析，且 proxies 字段满足 Mihomo 基本结构。"""
+
+    nodes = [
+        _make_node(
+            name="HK-01",
+            node_type="vless",
+            server="hk.example.com",
+            port=443,
+            uuid="uuid-1",
+            network="tcp",
+            tls=True,
+            sni="hk.example.com",
+            fingerprint="chrome",
+            public_key="pbk",
+            short_id="sid",
+        ),
+        _make_node(
+            name="JP-SS",
+            node_type="shadowsocks",
+            server="jp.example.com",
+            port=8388,
+            password="password-1",
+            cipher="aes-256-gcm",
+        ),
+    ]
+    yaml_text = ClashExporter().export([(nodes[0], "HK-01"), (nodes[1], "JP-SS")])
+    data = yaml.safe_load(yaml_text)
+    assert isinstance(data, dict)
+    assert isinstance(data["proxies"], list)
+    assert len(data["proxies"]) == 2
+    for proxy in data["proxies"]:
+        assert proxy["name"]
+        assert proxy["type"] in ("vless", "ss")
+        assert proxy["server"]
+        assert isinstance(proxy["port"], int)
+        if proxy["type"] == "vless":
+            assert proxy["uuid"]
+            assert proxy["network"] in ("tcp", "ws")
+            assert isinstance(proxy["tls"], bool)
+            assert proxy["udp"] is True
+        else:
+            assert proxy["cipher"]
+            assert proxy["password"]
+            assert proxy["udp"] is True

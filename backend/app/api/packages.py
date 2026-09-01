@@ -19,7 +19,11 @@ from app.schemas.package import (
     PackageUpdate,
     PreviewNode,
 )
-from app.services.package_service import PackageService
+from app.services.package_service import (
+    PackageService,
+    subscription_url,
+    subscription_url_for_package,
+)
 
 router = APIRouter(prefix="/packages", tags=["packages"])
 
@@ -32,8 +36,7 @@ def _get_package_or_404(db: Session, package_id: int):
 
 
 def _subscription_url(token: str) -> str:
-    base = get_settings().public_base_url.rstrip("/")
-    return f"{base}/sub/{token}"
+    return subscription_url(token)
 
 
 @router.get("", response_model=list[PackageSummary])
@@ -44,7 +47,12 @@ def list_packages(
     """套餐列表。"""
 
     packages = PackageRepository(db).list()
-    return [PackageSummary.model_validate(package) for package in packages]
+    summaries = []
+    for package in packages:
+        summary = PackageSummary.model_validate(package)
+        summary.subscription_url = subscription_url_for_package(package)
+        summaries.append(summary)
+    return summaries
 
 
 @router.post("", response_model=PackageCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -61,7 +69,6 @@ def create_package(
     return PackageCreateResponse(
         **detail.model_dump(),
         token=token,
-        subscription_url=_subscription_url(token),
     )
 
 

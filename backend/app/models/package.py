@@ -19,6 +19,7 @@ class Package(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

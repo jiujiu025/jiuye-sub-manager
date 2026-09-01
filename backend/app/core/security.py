@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import base64
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
+from cryptography.fernet import Fernet
 import jwt
 
 from app.core.config import get_settings
@@ -73,3 +75,25 @@ def mask_secret(value: str, keep_head: int = 6, keep_tail: int = 4) -> str:
     if len(value) <= keep_head + keep_tail:
         return "*" * len(value)
     return f"{value[:keep_head]}...{value[-keep_tail:]}"
+
+
+def _fernet() -> Fernet:
+    """从 JWT_SECRET_KEY 派生 Fernet 密钥，数据库不保存明文 Token。"""
+
+    settings = get_settings()
+    key = base64.urlsafe_b64encode(
+        hashlib.sha256(settings.jwt_secret_key.encode("utf-8")).digest()
+    )
+    return Fernet(key)
+
+
+def encrypt_secret(value: str) -> str:
+    """加密订阅 Token 等敏感值后存入数据库。"""
+
+    return _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_secret(value: str) -> str:
+    """解密数据库中的敏感值；仅用于认证后台展示订阅地址。"""
+
+    return _fernet().decrypt(value.encode("utf-8")).decode("utf-8")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 LOGIN_URL = "/api/admin/login"
@@ -88,3 +89,21 @@ def test_change_password_and_revert(client: TestClient) -> None:
         headers={"Authorization": f"Bearer {new_token}"},
     )
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sources",
+        "/api/nodes",
+        "/api/packages",
+        "/api/logs?kind=sync",
+        "/api/dashboard/stats",
+        "/api/system/settings",
+    ],
+)
+def test_all_backend_apis_require_auth(client: TestClient, path: str) -> None:
+    """所有后台管理接口未登录时必须返回 401。"""
+
+    response = client.get(path)
+    assert response.status_code == 401

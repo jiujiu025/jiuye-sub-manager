@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+# 让测试可以导入 scripts/ 下的备份恢复工具
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 # 必须在导入 app 前设置测试环境变量，确保使用独立数据库
 _tmp_dir = tempfile.mkdtemp(prefix="sub_manager_test_")

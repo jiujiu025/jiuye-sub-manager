@@ -8,13 +8,23 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, dashboard, health, logs, nodes, packages, sources, subscribe
+from app.api import (
+    admin,
+    dashboard,
+    health,
+    logs,
+    nodes,
+    packages,
+    settings as settings_api,
+    sources,
+    subscribe,
+)
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
 from app.db import engine
 from app.seed import ensure_admin
-from app.tasks.scheduler import SyncScheduler
+from app.tasks.scheduler import scheduler as sync_scheduler
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -25,11 +35,9 @@ async def lifespan(_: FastAPI):
     """应用启动时检查管理员账号；关闭时释放数据库连接池。"""
 
     ensure_admin()
-    scheduler = SyncScheduler()
-    if settings.sync_enabled:
-        scheduler.start()
+    sync_scheduler.start()
     yield
-    scheduler.shutdown()
+    sync_scheduler.shutdown()
     engine.dispose()
 
 
@@ -53,4 +61,5 @@ app.include_router(nodes.router, prefix="/api")
 app.include_router(packages.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
+app.include_router(settings_api.router, prefix="/api")
 app.include_router(subscribe.router)

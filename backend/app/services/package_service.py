@@ -7,8 +7,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
+from app.core.config import get_settings
 from app.core.exceptions import BusinessError
 from app.core.security import (
+    decrypt_secret,
+    encrypt_secret,
     generate_subscription_token,
     hash_subscription_token,
     token_prefix,
@@ -32,6 +35,25 @@ from app.utils.node_rules import (
 )
 
 
+def subscription_url(token: str) -> str:
+    """根据公开基础地址拼接订阅 URL。"""
+
+    base = get_settings().public_base_url.rstrip("/")
+    return f"{base}/sub/{token}"
+
+
+def subscription_url_for_package(package: Package) -> str | None:
+    """解密套餐 Token 并返回订阅地址；旧数据或密钥变化时返回 None。"""
+
+    if not package.token_encrypted:
+        return None
+    try:
+        token = decrypt_secret(package.token_encrypted)
+    except Exception:
+        return None
+    return subscription_url(token)
+
+
 class PackageService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -51,6 +73,7 @@ class PackageService:
             description=payload.description,
             token_hash=hash_subscription_token(token),
             token_prefix=token_prefix(token),
+            token_encrypted=encrypt_secret(token),
         )
         rule = self._build_rule(package, payload.rules)
         self.db.add(rule)
@@ -107,6 +130,7 @@ class PackageService:
         token = generate_subscription_token()
         package.token_hash = hash_subscription_token(token)
         package.token_prefix = token_prefix(token)
+        package.token_encrypted = encrypt_secret(token)
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
             action="regenerate_token",
@@ -179,6 +203,7 @@ class PackageService:
             enabled=package.enabled,
             description=package.description,
             token_prefix=package.token_prefix,
+            subscription_url=subscription_url_for_package(package),
             created_at=package.created_at,
             updated_at=package.updated_at,
             rules=PackageRulesPayload(
