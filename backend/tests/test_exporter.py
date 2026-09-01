@@ -150,3 +150,59 @@ def test_export_yaml_is_valid_mihomo_config() -> None:
             assert proxy["cipher"]
             assert proxy["password"]
             assert proxy["udp"] is True
+
+
+def test_export_vmess_trojan_socks_http() -> None:
+    """新协议节点应输出 Mihomo 可识别的代理配置。"""
+
+    nodes = [
+        _make_node(
+            name="VM-01",
+            node_type="vmess",
+            server="vm.example.com",
+            port=443,
+            uuid="uuid-vm",
+            network="ws",
+            path="/vm",
+            host="vm.example.com",
+            tls=True,
+            sni="vm.example.com",
+            metadata_json={"aid": 0},
+        ),
+        _make_node(
+            name="TR-01",
+            node_type="trojan",
+            server="tr.example.com",
+            port=443,
+            password="tr-pass",
+            tls=True,
+            sni="tr.example.com",
+        ),
+        _make_node(
+            name="SK-01",
+            node_type="socks",
+            server="sk.example.com",
+            port=1080,
+            username="sk-user",
+            password="sk-pass",
+        ),
+        _make_node(
+            name="HP-01",
+            node_type="http",
+            server="hp.example.com",
+            port=8080,
+            username="hp-user",
+            password="hp-pass",
+        ),
+    ]
+    items = [(node, node.name) for node in nodes]
+    data = yaml.safe_load(ClashExporter().export(items))
+    proxies = {proxy["name"]: proxy for proxy in data["proxies"]}
+    assert proxies["VM-01"]["type"] == "vmess"
+    assert proxies["VM-01"]["uuid"] == "uuid-vm"
+    assert proxies["TR-01"]["type"] == "trojan"
+    assert proxies["TR-01"]["password"] == "tr-pass"
+    assert proxies["SK-01"]["type"] == "socks5"
+    assert proxies["SK-01"]["username"] == "sk-user"
+    assert proxies["HP-01"]["type"] == "http"
+    assert proxies["HP-01"]["username"] == "hp-user"

@@ -20,6 +20,7 @@ class ParsedNode:
     port: int
     uuid: str | None = None
     password: str | None = None
+    username: str | None = None
     cipher: str | None = None
     network: str | None = None
     security: str | None = None

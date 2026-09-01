@@ -25,6 +25,7 @@ class Node(Base):
     port: Mapped[int] = mapped_column(Integer, nullable=False)
     uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
     password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    username: Mapped[str | None] = mapped_column(Text, nullable=True)
     cipher: Mapped[str | None] = mapped_column(String(64), nullable=True)
     network: Mapped[str | None] = mapped_column(String(32), nullable=True)
     security: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -36,6 +37,8 @@ class Node(Base):
     path: Mapped[str | None] = mapped_column(Text, nullable=True)
     host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     country: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    source_type: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
+    source_subtype: Mapped[str | None] = mapped_column(String(32), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True, nullable=False)
     node_fingerprint: Mapped[str] = mapped_column(
         String(64), unique=True, index=True, nullable=False

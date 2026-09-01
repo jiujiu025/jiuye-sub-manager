@@ -6,7 +6,20 @@ import base64
 import re
 
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/=\s]+$")
-_URI_SCHEMES = ("vless://", "ss://", "vmess://", "trojan://")
+_URI_SCHEMES = (
+    "vless://",
+    "vmess://",
+    "ss://",
+    "trojan://",
+    "socks://",
+    "socks5://",
+    "http://",
+    "https://",
+    "hysteria://",
+    "hysteria2://",
+    "hy2://",
+    "tuic://",
+)
 
 
 def _looks_like_base64(content: str) -> bool:
@@ -36,6 +49,8 @@ def detect_format(content: str) -> str:
         return "uri"
     if "proxies:" in stripped or "proxy-providers:" in stripped:
         return "clash"
+    if stripped.startswith("{") and "outbounds" in stripped:
+        return "singbox"
     if _looks_like_base64(stripped):
         decoded = decode_base64(stripped)
         if decoded and any(scheme in decoded for scheme in _URI_SCHEMES):

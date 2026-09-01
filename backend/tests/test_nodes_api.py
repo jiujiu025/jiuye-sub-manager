@@ -157,13 +157,13 @@ def test_self_node_replaces_upstream(
             original_name="HK-UPSTREAM",
             name="HK-UPSTREAM",
             type="vless",
-            server="dup.example.com",
+            server="dup-self-only.example.com",
             port=443,
             uuid="dup-uuid",
             country="香港",
             node_fingerprint=build_node_fingerprint(
                 node_type="vless",
-                server="dup.example.com",
+                server="dup-self-only.example.com",
                 port=443,
                 uuid="dup-uuid",
             ),
@@ -178,7 +178,7 @@ def test_self_node_replaces_upstream(
         json={
             "name": "HK-SELF",
             "type": "vless",
-            "server": "dup.example.com",
+            "server": "dup-self-only.example.com",
             "port": 443,
             "uuid": "dup-uuid",
         },
@@ -189,7 +189,9 @@ def test_self_node_replaces_upstream(
 
     db = SessionLocal()
     try:
-        rows = db.scalars(select(Node).where(Node.server == "dup.example.com")).all()
+        rows = db.scalars(
+            select(Node).where(Node.server == "dup-self-only.example.com")
+        ).all()
         assert len(rows) == 1
         assert rows[0].source_name == "自有节点"
     finally:

@@ -20,6 +20,7 @@ export const getNode = (id) => client.get(`/nodes/${id}`)
 export const updateNode = (id, data) => client.put(`/nodes/${id}`, data)
 export const deleteNode = (id) => client.delete(`/nodes/${id}`)
 export const batchNodes = (data) => client.post('/nodes/batch', data)
+export const importNodes = (data) => client.post('/nodes/import', data)
 
 export const listPackages = () => client.get('/packages')
 export const createPackage = (data) => client.post('/packages', data)

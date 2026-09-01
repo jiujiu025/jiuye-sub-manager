@@ -229,6 +229,7 @@ class SyncService:
             path=parsed.path,
             host=parsed.host,
             country=parsed.country,
+            source_type="upstream",
             node_fingerprint=fingerprint,
             metadata_json=parsed.metadata or None,
         )

@@ -10,7 +10,16 @@ from app.db import get_db
 from app.models.user import User
 from app.repositories.node_repo import NodeRepository
 from app.schemas.common import MessageResponse, Page
-from app.schemas.node import NodeBatchRequest, NodeCreate, NodeDetail, NodeSummary, NodeUpdate
+from app.schemas.node import (
+    NodeBatchRequest,
+    NodeCreate,
+    NodeDetail,
+    NodeImportRequest,
+    NodeImportResult,
+    NodeSummary,
+    NodeUpdate,
+)
+from app.services.node_import_service import NodeImportService
 from app.services.node_service import NodeService
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -61,6 +70,22 @@ def batch_nodes(
 
     processed = NodeService(db).batch(payload.ids, payload.action, admin)
     return MessageResponse(detail=f"已处理 {processed} 个节点")
+
+
+@router.post("/import", response_model=NodeImportResult)
+def import_nodes(
+    payload: NodeImportRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> NodeImportResult:
+    """批量导入节点链接或配置内容到统一节点池。"""
+
+    return NodeImportService(db).import_content(
+        payload.content,
+        payload.source_subtype,
+        payload.format,
+        admin,
+    )
 
 
 @router.post("", response_model=NodeDetail, status_code=status.HTTP_201_CREATED)

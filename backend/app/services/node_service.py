@@ -16,6 +16,18 @@ from app.utils.country import detect_country
 from app.utils.fingerprint import build_node_fingerprint
 from app.utils.priority import SELF_SOURCE_NAME
 
+SUPPORTED_NODE_TYPES = {
+    "vless",
+    "vmess",
+    "shadowsocks",
+    "trojan",
+    "socks",
+    "http",
+    "hysteria",
+    "hysteria2",
+    "tuic",
+}
+
 
 def _validate_self_node(
     node_type: str,
@@ -25,15 +37,19 @@ def _validate_self_node(
 ) -> None:
     """校验自有节点必须携带对应协议的关键字段。"""
 
-    if node_type not in ("vless", "shadowsocks"):
-        raise BusinessError("当前版本仅支持自有 VLESS 和 Shadowsocks 节点")
-    if node_type == "vless" and not uuid:
-        raise BusinessError("VLESS 节点缺少 UUID")
+    if node_type not in SUPPORTED_NODE_TYPES:
+        raise BusinessError(f"不支持的自有节点协议：{node_type}")
+    if node_type in ("vless", "vmess", "tuic") and not uuid:
+        raise BusinessError(f"{node_type.upper()} 节点缺少 UUID")
     if node_type == "shadowsocks":
         if not password:
             raise BusinessError("Shadowsocks 节点缺少密码")
         if not cipher:
             raise BusinessError("Shadowsocks 节点缺少加密方式")
+    if node_type == "trojan" and not password:
+        raise BusinessError("Trojan 节点缺少密码")
+    if node_type in ("hysteria", "hysteria2") and not password:
+        raise BusinessError(f"{node_type.upper()} 节点缺少认证密码")
 
 
 def _fingerprint_from_fields(
@@ -43,6 +59,7 @@ def _fingerprint_from_fields(
     port: int,
     uuid: str | None,
     password: str | None,
+    username: str | None,
     cipher: str | None,
     network: str | None,
     security: str | None,
@@ -56,6 +73,7 @@ def _fingerprint_from_fields(
         port=port,
         uuid=uuid,
         password=password,
+        username=username,
         cipher=cipher,
         network=network,
         security=security,
@@ -82,6 +100,7 @@ class NodeService:
             port=payload.port,
             uuid=payload.uuid,
             password=payload.password,
+            username=payload.username,
             cipher=payload.cipher,
             network=payload.network,
             security=payload.security,
@@ -106,6 +125,7 @@ class NodeService:
             port=payload.port,
             uuid=payload.uuid,
             password=payload.password,
+            username=payload.username,
             cipher=payload.cipher,
             network=payload.network,
             security=payload.security,
@@ -117,6 +137,8 @@ class NodeService:
             path=payload.path,
             host=payload.host,
             country=payload.country or detect_country(payload.name),
+            source_type="custom",
+            source_subtype=payload.source_subtype,
             enabled=payload.enabled,
             node_fingerprint=fingerprint,
         )
@@ -146,6 +168,7 @@ class NodeService:
             port=node.port,
             uuid=node.uuid,
             password=node.password,
+            username=node.username,
             cipher=node.cipher,
             network=node.network,
             security=node.security,
@@ -157,6 +180,8 @@ class NodeService:
         if other is not None and other.id != node.id:
             raise BusinessError("修改后与现有节点重复")
         node.node_fingerprint = new_fingerprint
+        node.source_type = "custom"
+        node.source_subtype = payload.source_subtype or node.source_subtype
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
             action="update_node",

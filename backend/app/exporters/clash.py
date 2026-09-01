@@ -22,6 +22,20 @@ class ClashExporter(BaseExporter):
             return ClashExporter._to_vless(node, name)
         if node.type == "shadowsocks":
             return ClashExporter._to_ss(node, name)
+        if node.type == "vmess":
+            return ClashExporter._to_vmess(node, name)
+        if node.type == "trojan":
+            return ClashExporter._to_trojan(node, name)
+        if node.type == "socks":
+            return ClashExporter._to_socks(node, name)
+        if node.type == "http":
+            return ClashExporter._to_http(node, name)
+        if node.type == "hysteria":
+            return ClashExporter._to_hysteria(node, name)
+        if node.type == "hysteria2":
+            return ClashExporter._to_hysteria2(node, name)
+        if node.type == "tuic":
+            return ClashExporter._to_tuic(node, name)
         return {
             "name": name,
             "type": node.type,
@@ -75,3 +89,151 @@ class ClashExporter(BaseExporter):
             "password": node.password,
             "udp": True,
         }
+
+    @staticmethod
+    def _ws_opts(node: Node) -> dict | None:
+        if node.network != "ws":
+            return None
+        ws_opts: dict = {}
+        if node.path:
+            ws_opts["path"] = node.path
+        if node.host:
+            ws_opts["headers"] = {"Host": node.host}
+        return ws_opts or None
+
+    @staticmethod
+    def _to_vmess(node: Node, name: str) -> dict:
+        metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+        proxy: dict = {
+            "name": name,
+            "type": "vmess",
+            "server": node.server,
+            "port": node.port,
+            "uuid": node.uuid,
+            "alterId": metadata.get("aid", 0),
+            "cipher": node.cipher or "auto",
+            "network": node.network or "tcp",
+            "tls": bool(node.tls),
+            "udp": True,
+        }
+        if node.sni:
+            proxy["servername"] = node.sni
+        if node.fingerprint:
+            proxy["client-fingerprint"] = node.fingerprint
+        ws_opts = ClashExporter._ws_opts(node)
+        if ws_opts:
+            proxy["ws-opts"] = ws_opts
+        return proxy
+
+    @staticmethod
+    def _to_trojan(node: Node, name: str) -> dict:
+        proxy: dict = {
+            "name": name,
+            "type": "trojan",
+            "server": node.server,
+            "port": node.port,
+            "password": node.password,
+            "network": node.network or "tcp",
+            "tls": bool(node.tls),
+            "udp": True,
+        }
+        if node.sni:
+            proxy["servername"] = node.sni
+        if node.fingerprint:
+            proxy["client-fingerprint"] = node.fingerprint
+        ws_opts = ClashExporter._ws_opts(node)
+        if ws_opts:
+            proxy["ws-opts"] = ws_opts
+        return proxy
+
+    @staticmethod
+    def _to_socks(node: Node, name: str) -> dict:
+        proxy: dict = {
+            "name": name,
+            "type": "socks5",
+            "server": node.server,
+            "port": node.port,
+            "udp": True,
+        }
+        if node.username:
+            proxy["username"] = node.username
+        if node.password:
+            proxy["password"] = node.password
+        if node.tls:
+            proxy["tls"] = True
+        if node.sni:
+            proxy["sni"] = node.sni
+        return proxy
+
+    @staticmethod
+    def _to_http(node: Node, name: str) -> dict:
+        proxy: dict = {
+            "name": name,
+            "type": "http",
+            "server": node.server,
+            "port": node.port,
+        }
+        if node.username:
+            proxy["username"] = node.username
+        if node.password:
+            proxy["password"] = node.password
+        if node.tls:
+            proxy["tls"] = True
+            if node.sni:
+                proxy["sni"] = node.sni
+        return proxy
+
+    @staticmethod
+    def _to_hysteria(node: Node, name: str) -> dict:
+        metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+        proxy: dict = {
+            "name": name,
+            "type": "hysteria",
+            "server": node.server,
+            "port": node.port,
+            "protocol": metadata.get("protocol") or "udp",
+        }
+        if node.password:
+            proxy["auth_str"] = node.password
+        if metadata.get("up"):
+            proxy["up"] = metadata["up"]
+        if metadata.get("down"):
+            proxy["down"] = metadata["down"]
+        if node.sni:
+            proxy["sni"] = node.sni
+        return proxy
+
+    @staticmethod
+    def _to_hysteria2(node: Node, name: str) -> dict:
+        metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+        proxy: dict = {
+            "name": name,
+            "type": "hysteria2",
+            "server": node.server,
+            "port": node.port,
+            "password": node.password,
+            "udp": True,
+        }
+        if node.sni:
+            proxy["sni"] = node.sni
+        if metadata.get("up"):
+            proxy["up"] = metadata["up"]
+        if metadata.get("down"):
+            proxy["down"] = metadata["down"]
+        return proxy
+
+    @staticmethod
+    def _to_tuic(node: Node, name: str) -> dict:
+        proxy: dict = {
+            "name": name,
+            "type": "tuic",
+            "server": node.server,
+            "port": node.port,
+            "uuid": node.uuid,
+            "udp": True,
+        }
+        if node.password:
+            proxy["password"] = node.password
+        if node.sni:
+            proxy["sni"] = node.sni
+        return proxy

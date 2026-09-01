@@ -31,6 +31,9 @@ class NodeSummary(ORMModel):
     updated_at: datetime
     uuid: str | None = Field(default=None, exclude=True)
     password: str | None = Field(default=None, exclude=True)
+    username: str | None = Field(default=None, exclude=True)
+    source_type: str | None
+    source_subtype: str | None
 
     @computed_field
     @property
@@ -42,16 +45,32 @@ class NodeSummary(ORMModel):
     def password_masked(self) -> str | None:
         return mask_secret(self.password) if self.password else None
 
+    @computed_field
+    @property
+    def username_masked(self) -> str | None:
+        return mask_secret(self.username) if self.username else None
+
 
 class NodeCreate(BaseModel):
     """自有节点创建请求。"""
 
     name: str = Field(min_length=1, max_length=255)
-    type: Literal["vless", "shadowsocks"] = "vless"
+    type: Literal[
+        "vless",
+        "vmess",
+        "shadowsocks",
+        "trojan",
+        "socks",
+        "http",
+        "hysteria",
+        "hysteria2",
+        "tuic",
+    ] = "vless"
     server: str = Field(min_length=1, max_length=255)
     port: int = Field(gt=0, lt=65536)
     uuid: str | None = None
     password: str | None = None
+    username: str | None = None
     cipher: str | None = None
     network: str | None = None
     security: str | None = None
@@ -64,6 +83,9 @@ class NodeCreate(BaseModel):
     host: str | None = None
     country: str | None = None
     enabled: bool = True
+    source_subtype: Literal["custom_url", "custom_manual", "custom_import"] = (
+        "custom_manual"
+    )
 
 
 class NodeUpdate(BaseModel):
@@ -74,6 +96,7 @@ class NodeUpdate(BaseModel):
     port: int | None = Field(default=None, gt=0, lt=65536)
     uuid: str | None = None
     password: str | None = None
+    username: str | None = None
     cipher: str | None = None
     network: str | None = None
     security: str | None = None
@@ -86,6 +109,7 @@ class NodeUpdate(BaseModel):
     host: str | None = None
     country: str | None = None
     enabled: bool | None = None
+    source_subtype: Literal["custom_url", "custom_manual", "custom_import"] | None = None
 
 
 class NodeBatchRequest(BaseModel):
@@ -93,6 +117,29 @@ class NodeBatchRequest(BaseModel):
 
     ids: list[int] = Field(min_length=1)
     action: Literal["enable", "disable", "delete"]
+
+
+class NodeImportRequest(BaseModel):
+    """自有节点批量导入请求。"""
+
+    content: str = Field(min_length=1)
+    source_subtype: Literal["custom_url", "custom_import"] = "custom_url"
+    format: str = "auto"
+
+
+class ImportFailure(BaseModel):
+    index: int
+    reason: str
+
+
+class NodeImportResult(BaseModel):
+    """导入统计：成功/重复/失败，失败原因不包含完整敏感链接。"""
+
+    total: int
+    success: int
+    duplicate: int
+    failed: int
+    failures: list[ImportFailure]
 
 
 class NodeDetail(ORMModel):
@@ -108,6 +155,7 @@ class NodeDetail(ORMModel):
     port: int
     uuid: str | None
     password: str | None
+    username: str | None
     cipher: str | None
     network: str | None
     security: str | None
@@ -119,6 +167,8 @@ class NodeDetail(ORMModel):
     path: str | None
     host: str | None
     country: str | None
+    source_type: str | None
+    source_subtype: str | None
     enabled: bool
     created_at: datetime
     updated_at: datetime
