@@ -109,6 +109,7 @@ docker compose up -d --build
 - 国家识别基于节点名称关键词，后续可扩展 GeoIP
 - 订阅 Token 仅在创建/重生成时显示一次，数据库只保存哈希
 - 生产环境日志会过滤 UUID、密码、完整 VLESS URL、上游 URL、Token
+- 订阅输出顶层的 `sub-name` 是机场订阅常见的扩展字段，并非所有 Clash/Mihomo 客户端都支持显示；未在真实客户端验证前不保证显示效果，订阅 URL 与节点内容不受该字段影响
 
 ## 系统设置
 

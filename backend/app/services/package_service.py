@@ -57,7 +57,16 @@ def subscription_url_for_package(package: Package) -> str | None:
 def display_subscription_name(package: Package) -> str:
     """订阅显示名称：未设置时回退到套餐名称。"""
 
-    return package.subscription_name or package.name
+    return normalize_subscription_name(package.subscription_name) or package.name
+
+
+def normalize_subscription_name(value: str | None) -> str | None:
+    """归一化订阅显示名称：strip 后为空视为未设置。"""
+
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 class PackageService:
@@ -75,7 +84,9 @@ class PackageService:
         token = generate_subscription_token()
         package = self.repo.create(
             name=payload.name,
-            subscription_name=payload.subscription_name or payload.name,
+            subscription_name=(
+                normalize_subscription_name(payload.subscription_name) or payload.name
+            ),
             enabled=payload.enabled,
             description=payload.description,
             token_hash=hash_subscription_token(token),
@@ -106,8 +117,8 @@ class PackageService:
             if self.repo.get_by_name(data["name"]) is not None:
                 raise BusinessError("套餐名称已存在")
         for key, value in data.items():
-            if key == "subscription_name" and value in (None, ""):
-                setattr(package, key, None)
+            if key == "subscription_name":
+                setattr(package, key, normalize_subscription_name(value))
                 continue
             setattr(package, key, value)
         if rules_payload is not None:

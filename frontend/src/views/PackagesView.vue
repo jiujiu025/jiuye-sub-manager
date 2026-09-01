@@ -183,6 +183,7 @@ async function loadSources() {
 function resetForm() {
   Object.assign(form, {
     name: '',
+    subscription_name: '',
     description: '',
     enabled: true,
     rules: {

@@ -202,3 +202,193 @@ def test_legacy_package_with_null_subscription_name(
     assert response.status_code == 200
     data = yaml.safe_load(response.text)
     assert data["sub-name"] == "旧套餐名称"
+
+
+def test_whitespace_only_subscription_name_falls_back(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """全空格 subscription_name 应 fallback 到套餐名称。"""
+
+    payload = _create_package(client, auth_headers, "空格套餐A", subscription_name="   ")
+    assert payload["subscription_name"] == "空格套餐A"
+
+    db = SessionLocal()
+    try:
+        stored = db.scalar(
+            select(Package).where(Package.name == "空格套餐A")
+        )
+        assert stored.subscription_name == "空格套餐A"
+    finally:
+        db.close()
+
+
+def test_subscription_name_trims_around_spaces(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """前后空格应自动清理。"""
+
+    payload = _create_package(
+        client, auth_headers, "空格套餐B", subscription_name="  美国直播  "
+    )
+    assert payload["subscription_name"] == "美国直播"
+
+    db = SessionLocal()
+    try:
+        stored = db.scalar(
+            select(Package).where(Package.name == "空格套餐B")
+        )
+        assert stored.subscription_name == "美国直播"
+    finally:
+        db.close()
+
+
+def test_special_characters_subscription_name_output(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """中文、emoji、引号、冒号、换行、反斜杠不应破坏创建与 YAML 输出。"""
+
+    special = '中文「引号」: 冒号 😀 反斜杠\\ 换行\n第二行'
+    db = SessionLocal()
+    try:
+        _add_node(
+            db,
+            server="special-subname.example.com",
+            name="特殊字符节点",
+            uuid="special-subname-uuid",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    payload = _create_package(
+        client,
+        auth_headers,
+        "特殊字符套餐",
+        subscription_name=special,
+        rules={"include_keywords": ["特殊字符节点"]},
+    )
+    assert payload["subscription_name"] == special
+    token = payload["token"]
+
+    response = client.get(f"/sub/{token}")
+    assert response.status_code == 200
+    data = yaml.safe_load(response.text)
+    assert data["sub-name"] == special
+    assert data["proxies"]
+
+
+def test_subscription_name_too_long_rejected(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """超长 subscription_name 应返回 422。"""
+
+    response = client.post(
+        "/api/packages",
+        json={"name": "超长套餐", "subscription_name": "a" * 129},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+
+
+def test_clear_subscription_name_falls_back_and_output_refreshes(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """清空 subscription_name 后 fallback 到套餐名，订阅输出立即更新。"""
+
+    db = SessionLocal()
+    try:
+        _add_node(
+            db,
+            server="clear-subname.example.com",
+            name="清空测试节点",
+            uuid="clear-subname-uuid",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    payload = _create_package(
+        client,
+        auth_headers,
+        "清空套餐",
+        subscription_name="自定义显示名",
+        rules={"include_keywords": ["清空测试节点"]},
+    )
+    package_id = payload["id"]
+    token = payload["token"]
+    assert yaml.safe_load(client.get(f"/sub/{token}").text)["sub-name"] == "自定义显示名"
+
+    cleared = client.put(
+        f"/api/packages/{package_id}",
+        json={"subscription_name": "   "},
+        headers=auth_headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["subscription_name"] == "清空套餐"
+    data = yaml.safe_load(client.get(f"/sub/{token}").text)
+    assert data["sub-name"] == "清空套餐"
+
+    cleared_empty = client.put(
+        f"/api/packages/{package_id}",
+        json={"subscription_name": ""},
+        headers=auth_headers,
+    )
+    assert cleared_empty.json()["subscription_name"] == "清空套餐"
+
+
+def test_update_name_then_subscription_output_refreshes(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """修改 subscription_name 后立即 GET /sub 应返回新名称，URL 不变。"""
+
+    db = SessionLocal()
+    try:
+        _add_node(
+            db,
+            server="refresh-subname.example.com",
+            name="刷新测试节点",
+            uuid="refresh-subname-uuid",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    payload = _create_package(
+        client,
+        auth_headers,
+        "刷新套餐",
+        subscription_name="旧名称",
+        rules={"include_keywords": ["刷新测试节点"]},
+    )
+    package_id = payload["id"]
+    token = payload["token"]
+    url_before = payload["subscription_url"]
+    assert yaml.safe_load(client.get(f"/sub/{token}").text)["sub-name"] == "旧名称"
+
+    updated = client.put(
+        f"/api/packages/{package_id}",
+        json={"subscription_name": "新名称"},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+
+    items = client.get("/api/packages", headers=auth_headers).json()
+    item = next(x for x in items if x["id"] == package_id)
+    assert item["subscription_url"] == url_before
+    data = yaml.safe_load(client.get(f"/sub/{token}").text)
+    assert data["sub-name"] == "新名称"
+
+
+def test_create_two_packages_no_inherit(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """连续创建套餐时，第二个套餐不应继承第一个的 subscription_name。"""
+
+    first = _create_package(
+        client, auth_headers, "继承测试A", subscription_name="A 的显示名"
+    )
+    assert first["subscription_name"] == "A 的显示名"
+
+    second = _create_package(client, auth_headers, "继承测试B")
+    assert second["subscription_name"] == "继承测试B"
+    assert second["subscription_name"] != "A 的显示名"
