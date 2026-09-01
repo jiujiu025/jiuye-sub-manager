@@ -1,0 +1,76 @@
+"""套餐相关请求/响应模型。"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PackageRulesPayload(BaseModel):
+    """套餐规则：套餐不保存节点副本，只保存筛选与展示规则。"""
+
+    source_filter: list[str] = Field(default_factory=list)
+    country_filter: list[str] = Field(default_factory=list)
+    type_filter: list[str] = Field(default_factory=list)
+    include_keywords: list[str] = Field(default_factory=list)
+    exclude_keywords: list[str] = Field(default_factory=list)
+    rename_rules: list[dict[str, Any]] = Field(default_factory=list)
+    sort_rules: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PackageCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    enabled: bool = True
+    description: str | None = None
+    rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
+
+
+class PackageUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    enabled: bool | None = None
+    description: str | None = None
+    rules: PackageRulesPayload | None = None
+
+
+class PackageSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    enabled: bool
+    description: str | None
+    token_prefix: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class PackageDetail(PackageSummary):
+    rules: PackageRulesPayload
+
+
+class PackageCreateResponse(PackageDetail):
+    """创建套餐时返回一次明文 Token，后续不再返回。"""
+
+    token: str
+    subscription_url: str
+
+
+class PackageTokenResponse(BaseModel):
+    package_id: int
+    token: str
+    subscription_url: str
+
+
+class PreviewNode(BaseModel):
+    """套餐预览节点（应用规则后的展示结果）。"""
+
+    id: int
+    source_name: str
+    original_name: str
+    name: str
+    type: str
+    server: str
+    port: int
+    country: str | None
