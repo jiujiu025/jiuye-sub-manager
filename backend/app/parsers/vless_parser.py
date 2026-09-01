@@ -21,6 +21,11 @@ def parse_vless_uri(uri: str) -> ParsedNode:
     uuid = parsed.username or ""
     if not uuid:
         raise ParseError("VLESS 链接缺少 UUID")
+    is_reality = (
+        params.get("security") == "reality"
+        or bool(params.get("pbk") or params.get("public-key"))
+        or bool(params.get("sid") or params.get("short-id"))
+    )
     return ParsedNode(
         original_name=name,
         type="vless",
@@ -29,7 +34,7 @@ def parse_vless_uri(uri: str) -> ParsedNode:
         uuid=uuid,
         network=params.get("type"),
         security=params.get("security"),
-        tls=params.get("tls", "").lower() == "true",
+        tls=params.get("tls", "").lower() == "true" or is_reality,
         sni=params.get("sni"),
         fingerprint=params.get("fp") or params.get("client-fingerprint"),
         public_key=params.get("pbk") or params.get("public-key"),

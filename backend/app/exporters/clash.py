@@ -52,6 +52,11 @@ class ClashExporter(BaseExporter):
 
     @staticmethod
     def _to_vless(node: Node, name: str) -> dict:
+        is_reality = (
+            node.security == "reality"
+            or bool(node.public_key)
+            or bool(node.short_id)
+        )
         proxy: dict = {
             "name": name,
             "type": "vless",
@@ -59,7 +64,7 @@ class ClashExporter(BaseExporter):
             "port": node.port,
             "uuid": node.uuid,
             "network": node.network or "tcp",
-            "tls": bool(node.tls),
+            "tls": bool(node.tls) or is_reality,
             "udp": True,
         }
         if node.sni:

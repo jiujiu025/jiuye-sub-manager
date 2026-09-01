@@ -147,7 +147,11 @@ def test_subscription_end_to_end(
     subscription_url = create_response.json()["subscription_url"]
     assert subscription_url.endswith(f"/sub/{token}")
 
-    first_yaml = _subscription_for(client, token)
+    first_response = client.get(f"/sub/{token}")
+    assert first_response.status_code == 200
+    content_disposition = first_response.headers.get("content-disposition", "")
+    assert "sub.yaml" not in content_disposition
+    first_yaml = first_response.text
     assert "hk-a.example.com" in first_yaml
     assert "proxy-providers" not in first_yaml
     assert "provider.example.com" not in first_yaml

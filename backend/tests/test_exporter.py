@@ -69,6 +69,23 @@ def test_export_vless_reality() -> None:
     assert "pbk-secret" in yaml_text
     assert "sid-secret" in yaml_text
     assert "xtls-rprx-vision" in yaml_text
+    assert "tls: true" in yaml_text
+
+
+def test_export_plain_vless_tls_unchanged() -> None:
+    """普通 VLESS（无 Reality 字段）的 tls 状态不应被强制改为 true。"""
+
+    node = _make_node(
+        name="HK-01",
+        node_type="vless",
+        server="hk.example.com",
+        port=443,
+        uuid="uuid-secret",
+        tls=False,
+    )
+    yaml_text = ClashExporter().export([(node, "HK-01")])
+    data = yaml.safe_load(yaml_text)
+    assert data["proxies"][0]["tls"] is False
 
 
 def test_export_shadowsocks() -> None:

@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BusinessError
 from app.db import get_db
+from app.services.package_service import display_subscription_name
 from app.services.subscription_service import SubscriptionService
 
 router = APIRouter(tags=["subscribe"])
+
+
+def _subscription_disposition(package) -> str:
+    """根据订阅显示名称生成 Content-Disposition，不再固定使用 sub.yaml。"""
+
+    name = display_subscription_name(package)
+    encoded = quote(name, safe="")
+    return (
+        'attachment; filename="subscription.yaml"; '
+        f"filename*=UTF-8''{encoded}.yaml"
+    )
 
 
 @router.get("/sub/{token}")
@@ -35,7 +49,7 @@ def get_subscription(
         return Response(
             content=cached,
             media_type="text/yaml; charset=utf-8",
-            headers={"Content-Disposition": 'attachment; filename="sub.yaml"'},
+            headers={"Content-Disposition": _subscription_disposition(package)},
         )
 
     try:
@@ -49,5 +63,5 @@ def get_subscription(
     return Response(
         content=yaml_text,
         media_type="text/yaml; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="sub.yaml"'},
+        headers={"Content-Disposition": _subscription_disposition(package)},
     )
