@@ -182,6 +182,7 @@ class PackageService:
 
         rules = package.rules
         source_filter = rules.source_filter if rules else None
+        node_ids = rules.node_ids if rules else None
         country_filter = rules.country_filter if rules else None
         type_filter = rules.type_filter if rules else None
         include_keywords = rules.include_keywords if rules else None
@@ -189,6 +190,7 @@ class PackageService:
 
         nodes = self.node_repo.list_enabled_with_filters(
             sources=source_filter or None,
+            node_ids=node_ids or None,
             countries=country_filter or None,
             types=type_filter or None,
             include_keywords=include_keywords or None,
@@ -230,6 +232,7 @@ class PackageService:
             updated_at=package.updated_at,
             rules=PackageRulesPayload(
                 source_filter=(rules.source_filter or []) if rules else [],
+                node_ids=(rules.node_ids or []) if rules else [],
                 country_filter=(rules.country_filter or []) if rules else [],
                 type_filter=(rules.type_filter or []) if rules else [],
                 include_keywords=(rules.include_keywords or []) if rules else [],

@@ -43,6 +43,9 @@ class Node(Base):
     node_fingerprint: Mapped[str] = mapped_column(
         String(64), unique=True, index=True, nullable=False
     )
+    source_node_key: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True
+    )
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

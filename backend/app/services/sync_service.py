@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 import httpx
+from curl_cffi import requests as curl_requests
+from curl_cffi.requests import errors as curl_errors
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
@@ -18,24 +20,56 @@ from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
 from app.repositories.source_repo import SourceRepository
 from app.schemas.source import SyncResult
-from app.utils.fingerprint import build_node_fingerprint, fingerprint_for_parsed
+from app.utils.fingerprint import (
+    fingerprint_for_parsed,
+    source_node_key_for_node,
+    source_node_key_for_parsed,
+)
 from app.utils.priority import build_source_priority
 
 logger = logging.getLogger(__name__)
 
 
+class _UpstreamStatusError(Exception):
+    """上游返回非 2xx 状态码。"""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
 def _classify_error(exc: Exception) -> str:
     """把网络异常转换为人类可读的错误信息。"""
 
+    if isinstance(exc, _UpstreamStatusError):
+        return f"上游返回 HTTP {exc.status_code}"
     if isinstance(exc, httpx.TimeoutException):
         return "上游请求超时"
     if isinstance(exc, httpx.ConnectError):
-        if "ssl" in str(exc).lower():
-            return "上游 SSL 证书错误"
+        message = str(exc).lower()
+        if "unexpected_eof" in message:
+            return "TLS 握手失败（上游中断连接）"
+        if "certificate_verify_failed" in message:
+            return "SSL 证书验证失败"
+        if "self-signed certificate" in message:
+            return "SSL 证书为自签名证书"
+        if "unable to get local issuer certificate" in message:
+            return "SSL 证书链验证失败"
+        if "ssl" in message:
+            return "TLS/SSL 连接错误"
         return "上游连接失败（DNS 或网络不可达）"
     if isinstance(exc, httpx.HTTPStatusError):
         return f"上游返回 HTTP {exc.response.status_code}"
     if isinstance(exc, httpx.HTTPError):
+        return "上游 HTTP 请求失败"
+    if isinstance(exc, (curl_errors.RequestsError, curl_errors.CurlError)):
+        message = str(exc).lower()
+        if "timed out" in message or "timeout" in message or "curl(28)" in message:
+            return "上游请求超时"
+        if "unexpected_eof" in message:
+            return "TLS 握手失败（上游中断连接）"
+        if "ssl" in message or "certificate" in message:
+            return "TLS/SSL 连接错误"
         return "上游 HTTP 请求失败"
     return "同步失败"
 
@@ -46,10 +80,8 @@ class SyncService:
         self.source_repo = SourceRepository(db)
         self.node_repo = NodeRepository(db)
         self.log_repo = LogRepository(db)
-        self.client = http_client or httpx.Client(
-            timeout=get_settings().http_timeout_seconds,
-            follow_redirects=True,
-        )
+        self.timeout = get_settings().http_timeout_seconds
+        self.client = http_client or curl_requests.Session()
 
     def sync_source(self, source: Source) -> SyncResult:
         """同步单个上游；失败时保留旧节点，只更新状态与日志。"""
@@ -68,10 +100,8 @@ class SyncService:
             return self._commit_success(source, parsed_nodes)
         except ParseError as exc:
             return self._mark_failure(source, str(exc))
-        except httpx.HTTPError as exc:
-            return self._mark_failure(source, _classify_error(exc))
         except Exception as exc:
-            logger.exception("同步上游 %s 时发生未预期错误", source.name)
+            logger.warning("同步上游 %s 时发生未预期错误：%s", source.name, type(exc).__name__)
             return self._mark_failure(source, _classify_error(exc))
 
     def sync_all_enabled(self) -> list[SyncResult]:
@@ -83,8 +113,15 @@ class SyncService:
         return results
 
     def _fetch(self, url: str) -> str:
-        response = self.client.get(url)
-        response.raise_for_status()
+        response = self.client.get(
+            url,
+            timeout=self.timeout,
+            allow_redirects=True,
+            verify=True,
+            headers={"User-Agent": get_settings().upstream_user_agent},
+        )
+        if not response.ok:
+            raise _UpstreamStatusError(response.status_code)
         content = response.text or ""
         lowered = content.strip().lower()
         if lowered.startswith(("<html", "<!doctype html")):
@@ -95,48 +132,71 @@ class SyncService:
         self, source: Source, parsed_nodes: list[ParsedNode]
     ) -> SyncResult:
         """去重后在同一事务中替换旧节点，任何异常都会回滚。"""
-
-        old_nodes = self.node_repo.list_by_source(source.id)
-        old_map = {node.node_fingerprint: node for node in old_nodes}
-        priority = build_source_priority(self.db)
-        current_priority = priority.get(source.name, 1000)
-
-        seen: set[str] = set()
-        new_nodes: list[Node] = []
-        new_map: dict[str, Node] = {}
-        for parsed in parsed_nodes:
-            fingerprint = fingerprint_for_parsed(parsed)
-            if fingerprint in seen:
-                continue
-            existing = self.node_repo.get_by_fingerprint(fingerprint)
-            if existing is not None and existing.source_id != source.id:
-                existing_priority = priority.get(existing.source_name, 1000)
-                if current_priority >= existing_priority:
-                    # 当前来源优先级不高于现有节点，统一节点池只保留一份
-                    continue
-                # 当前来源优先级更高，替换低优先级来源的节点
-                if existing.source_id is not None:
-                    owner = self.source_repo.get(existing.source_id)
-                    if owner is not None:
-                        owner.node_count = max(0, owner.node_count - 1)
-                self.node_repo.delete(existing)
-            seen.add(fingerprint)
-            node = self._to_orm(source, parsed, fingerprint)
-            new_nodes.append(node)
-            new_map[fingerprint] = node
-
-        old_keys = set(old_map)
-        new_keys = set(new_map)
-        added = len(new_keys - old_keys)
-        removed = len(old_keys - new_keys)
-        changed = sum(
-            1
-            for key in old_keys & new_keys
-            if old_map[key].name != new_map[key].name
-            or old_map[key].country != new_map[key].country
-        )
-
         try:
+            old_nodes = self.node_repo.list_by_source(source.id)
+            old_map = {node.node_fingerprint: node for node in old_nodes}
+            old_identity_map: dict[str, Node] = {}
+            ambiguous_identity_keys: set[str] = set()
+            for old_node in old_nodes:
+                identity = old_node.source_node_key or source_node_key_for_node(old_node)
+                if not identity:
+                    continue
+                if identity in old_identity_map:
+                    ambiguous_identity_keys.add(identity)
+                else:
+                    old_identity_map[identity] = old_node
+            for identity in ambiguous_identity_keys:
+                old_identity_map.pop(identity, None)
+            priority = build_source_priority(self.db)
+            current_priority = priority.get(source.name, 1000)
+
+            seen: set[str] = set()
+            new_nodes: list[Node] = []
+            new_map: dict[str, Node] = {}
+            for parsed in parsed_nodes:
+                fingerprint = fingerprint_for_parsed(parsed)
+                if fingerprint in seen:
+                    continue
+                existing = self.node_repo.get_by_fingerprint(fingerprint)
+                if existing is not None and existing.source_id != source.id:
+                    existing_priority = priority.get(existing.source_name, 1000)
+                    if current_priority >= existing_priority:
+                        # 当前来源优先级不高于现有节点，统一节点池只保留一份
+                        continue
+                    # 当前来源优先级更高，替换低优先级来源的节点
+                    if existing.source_id is not None:
+                        owner = self.source_repo.get(existing.source_id)
+                        if owner is not None:
+                            owner.node_count = max(0, owner.node_count - 1)
+                    self.node_repo.delete(existing)
+                seen.add(fingerprint)
+                source_node_key = source_node_key_for_parsed(parsed)
+                old_node = old_map.get(fingerprint)
+                if old_node is None and source_node_key:
+                    candidate = old_identity_map.get(source_node_key)
+                    if candidate is not None:
+                        old_node = candidate
+                node = self._to_orm(
+                    source,
+                    parsed,
+                    fingerprint,
+                    enabled=old_node.enabled if old_node is not None else None,
+                    source_node_key=source_node_key,
+                )
+                new_nodes.append(node)
+                new_map[fingerprint] = node
+
+            old_keys = set(old_map)
+            new_keys = set(new_map)
+            added = len(new_keys - old_keys)
+            removed = len(old_keys - new_keys)
+            changed = sum(
+                1
+                for key in old_keys & new_keys
+                if old_map[key].name != new_map[key].name
+                or old_map[key].country != new_map[key].country
+            )
+
             self.node_repo.delete_by_source(source.id)
             self.node_repo.bulk_add(new_nodes)
             source.node_count = len(new_nodes)
@@ -207,7 +267,13 @@ class SyncService:
         )
 
     @staticmethod
-    def _to_orm(source: Source, parsed: ParsedNode, fingerprint: str) -> Node:
+    def _to_orm(
+        source: Source,
+        parsed: ParsedNode,
+        fingerprint: str,
+        enabled: bool | None = None,
+        source_node_key: str | None = None,
+    ) -> Node:
         return Node(
             source_id=source.id,
             source_name=source.name,
@@ -230,6 +296,8 @@ class SyncService:
             host=parsed.host,
             country=parsed.country,
             source_type="upstream",
+            enabled=True if enabled is None else enabled,
             node_fingerprint=fingerprint,
+            source_node_key=source_node_key,
             metadata_json=parsed.metadata or None,
         )

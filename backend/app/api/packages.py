@@ -14,16 +14,13 @@ from app.schemas.package import (
     PackageCreate,
     PackageCreateResponse,
     PackageDetail,
-    PackageSummary,
     PackageTokenResponse,
     PackageUpdate,
     PreviewNode,
 )
 from app.services.package_service import (
     PackageService,
-    display_subscription_name,
     subscription_url,
-    subscription_url_for_package,
 )
 
 router = APIRouter(prefix="/packages", tags=["packages"])
@@ -40,21 +37,16 @@ def _subscription_url(token: str) -> str:
     return subscription_url(token)
 
 
-@router.get("", response_model=list[PackageSummary])
+@router.get("", response_model=list[PackageDetail])
 def list_packages(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin),
-) -> list[PackageSummary]:
+) -> list[PackageDetail]:
     """套餐列表。"""
 
     packages = PackageRepository(db).list()
-    summaries = []
-    for package in packages:
-        summary = PackageSummary.model_validate(package)
-        summary.subscription_url = subscription_url_for_package(package)
-        summary.subscription_name = display_subscription_name(package)
-        summaries.append(summary)
-    return summaries
+    service = PackageService(db)
+    return [service.to_detail(package) for package in packages]
 
 
 @router.post("", response_model=PackageCreateResponse, status_code=status.HTTP_201_CREATED)

@@ -1,6 +1,5 @@
 <template>
   <div>
-    <h2>系统日志</h2>
     <el-tabs v-model="kind" @tab-change="load">
       <el-tab-pane label="同步日志" name="sync" />
       <el-tab-pane label="订阅请求" name="subscription" />

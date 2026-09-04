@@ -57,3 +57,60 @@ def fingerprint_for_parsed(parsed: object) -> str:
         host=parsed.host,
         sni=parsed.sni,
     )
+
+
+def build_source_node_key(
+    *,
+    node_type: str,
+    uuid: str | None = None,
+    password: str | None = None,
+    cipher: str | None = None,
+    original_name: str | None = None,
+) -> str | None:
+    """基于明确的协议稳定字段生成来源内节点标识。"""
+
+    normalized_type = node_type.strip().lower()
+    normalized_uuid = (uuid or "").strip().lower()
+    if normalized_uuid and normalized_type in {"vless", "vmess", "tuic"}:
+        identity = f"{normalized_type}|uuid|{normalized_uuid}"
+    elif (
+        normalized_type in {"shadowsocks", "trojan"}
+        and password
+        and original_name
+    ):
+        identity = "|".join(
+            [
+                normalized_type,
+                "credential",
+                password.strip(),
+                (cipher or "").strip().lower(),
+                original_name.strip().lower(),
+            ]
+        )
+    else:
+        return None
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def source_node_key_for_parsed(parsed: object) -> str | None:
+    """根据解析结果生成来源内节点标识。"""
+
+    return build_source_node_key(
+        node_type=parsed.type,
+        uuid=parsed.uuid,
+        password=parsed.password,
+        cipher=parsed.cipher,
+        original_name=parsed.original_name,
+    )
+
+
+def source_node_key_for_node(node: object) -> str | None:
+    """根据旧节点字段生成来源内节点标识，兼容迁移前数据。"""
+
+    return build_source_node_key(
+        node_type=node.type,
+        uuid=node.uuid,
+        password=node.password,
+        cipher=node.cipher,
+        original_name=node.original_name,
+    )

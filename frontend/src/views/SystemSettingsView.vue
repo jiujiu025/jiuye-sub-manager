@@ -1,7 +1,7 @@
 <template>
-  <div>
-    <h2>系统设置</h2>
-    <el-form label-width="200px" style="max-width: 720px">
+  <div class="page">
+    <div class="surface-card settings-card">
+    <el-form label-width="200px">
       <el-form-item label="自动同步间隔（分钟）">
         <el-input-number v-model="form.sync_interval_minutes" :min="1" :max="1440" />
       </el-form-item>
@@ -34,6 +34,7 @@
       title="生效说明"
       description="同步间隔、定时同步开关、缓存 TTL、去重优先级保存后立即生效；JWT 密钥、管理员密码、HTTP 超时等配置需修改 .env 后重启服务。"
     />
+    </div>
   </div>
 </template>
 
@@ -80,6 +81,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.settings-card {
+  max-width: 720px;
+}
+
 .hint {
   margin-top: 4px;
   color: #9ca3af;

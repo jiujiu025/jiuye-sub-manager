@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     sync_enabled: bool = True
     cache_ttl_seconds: int = 300
     http_timeout_seconds: float = 15.0
+    upstream_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    )
     cors_origins: str = "*"
     public_base_url: str = "http://localhost:8000"
 

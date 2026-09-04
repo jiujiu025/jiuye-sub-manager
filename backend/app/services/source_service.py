@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BusinessError
 from app.models.source import Source
+from app.models.package import PackageRule
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
@@ -58,6 +60,16 @@ class SourceService:
         if "name" in data and data["name"] != source.name:
             if self.repo.get_by_name(data["name"]) is not None:
                 raise BusinessError("订阅名称已存在")
+            old_name = source.name
+            new_name = data["name"]
+            for node in self.node_repo.list_by_source(source.id):
+                node.source_name = new_name
+            for rule in self.db.scalars(select(PackageRule)).all():
+                if isinstance(rule.source_filter, list):
+                    rule.source_filter = [
+                        new_name if value == old_name else value
+                        for value in rule.source_filter
+                    ]
         for key, value in data.items():
             setattr(source, key, value)
         self.log_repo.create_admin_log(

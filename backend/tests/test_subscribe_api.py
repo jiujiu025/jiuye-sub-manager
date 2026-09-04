@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import base64
+from urllib.parse import unquote
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -15,6 +15,7 @@ from app.models.package import Package
 from app.models.source import Source
 from app.services.sync_service import SyncService
 from app.utils.fingerprint import build_node_fingerprint
+from tests.fakes import FakeClient, FakeResponse
 
 
 @pytest.fixture
@@ -125,11 +126,8 @@ def test_subscription_end_to_end(
 
         SyncService(
             db,
-            http_client=httpx.Client(
-                transport=httpx.MockTransport(
-                    lambda request: httpx.Response(200, text=hk_payload)
-                ),
-                timeout=5,
+            http_client=FakeClient(
+                lambda url, kwargs: FakeResponse(200, hk_payload)
             ),
         ).sync_source(source)
     finally:
@@ -151,6 +149,8 @@ def test_subscription_end_to_end(
     assert first_response.status_code == 200
     content_disposition = first_response.headers.get("content-disposition", "")
     assert "sub.yaml" not in content_disposition
+    star_value = content_disposition.split("filename*=UTF-8''", 1)[1]
+    assert unquote(star_value) == "自动更新套餐"
     first_yaml = first_response.text
     assert "hk-a.example.com" in first_yaml
     assert "proxy-providers" not in first_yaml
@@ -163,11 +163,8 @@ def test_subscription_end_to_end(
         assert source is not None
         SyncService(
             db,
-            http_client=httpx.Client(
-                transport=httpx.MockTransport(
-                    lambda request: httpx.Response(200, text=jp_payload)
-                ),
-                timeout=5,
+            http_client=FakeClient(
+                lambda url, kwargs: FakeResponse(200, jp_payload)
             ),
         ).sync_source(source)
     finally:

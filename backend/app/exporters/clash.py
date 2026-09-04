@@ -64,7 +64,9 @@ class ClashExporter(BaseExporter):
             "port": node.port,
             "uuid": node.uuid,
             "network": node.network or "tcp",
-            "tls": bool(node.tls) or is_reality,
+            "tls": bool(node.tls)
+            or str(node.security or "").lower() == "tls"
+            or is_reality,
             "udp": True,
         }
         if node.sni:
@@ -122,7 +124,7 @@ class ClashExporter(BaseExporter):
             "server": node.server,
             "port": node.port,
             "uuid": node.uuid,
-            "alterId": metadata.get("aid", 0),
+            "alterId": metadata.get("aid", metadata.get("alterId", 0)),
             "cipher": node.cipher or "auto",
             "network": node.network or "tcp",
             "tls": bool(node.tls),

@@ -35,6 +35,26 @@ def test_parse_vless_uri() -> None:
     assert node.country == "香港"
 
 
+def test_parse_vless_tls_security_enables_tls() -> None:
+    """VLESS security=tls 应被识别为 TLS，且不依赖显式 tls 参数。"""
+
+    node = parse_vless_uri(
+        "vless://uuid-tls@tls.example.com:443?security=tls&sni=tls.example.com"
+    )
+    assert node.security == "tls"
+    assert node.tls is True
+
+
+def test_parse_vless_reality_security_is_case_insensitive() -> None:
+    """VLESS Reality 的 security 大小写不应改变 Reality 判定。"""
+
+    node = parse_vless_uri(
+        "vless://uuid-reality@reality.example.com:443?security=Reality&pbk=key"
+    )
+    assert node.security == "reality"
+    assert node.tls is True
+
+
 def test_parse_ss_uri_sip002() -> None:
     """SIP002 格式 SS URI 应正确解码 Base64 的 method:password。"""
 
@@ -57,6 +77,20 @@ def test_parse_ss_uri_legacy() -> None:
     assert node.password == "password"
     assert node.original_name == "日本01"
     assert node.country == "日本"
+
+
+def test_parse_ss_uri_sip002_whole_authority_base64() -> None:
+    """标准 SIP002 应支持将完整 method:password@host:port 编码。"""
+
+    encoded = base64.urlsafe_b64encode(
+        b"aes-256-gcm:password@server.example:8388"
+    ).decode("ascii").rstrip("=")
+    node = parse_ss_uri(f"ss://{encoded}#US-SIP002")
+    assert node.cipher == "aes-256-gcm"
+    assert node.password == "password"
+    assert node.server == "server.example"
+    assert node.port == 8388
+    assert node.original_name == "US-SIP002"
 
 
 def test_parse_base64_subscription() -> None:
@@ -103,6 +137,104 @@ proxies:
     assert nodes[0].type == "vless"
     assert nodes[0].country == "香港"
     assert nodes[1].type == "shadowsocks"
+
+
+def test_parse_clash_mihomo_protocol_and_nested_transport_fields() -> None:
+    """Clash/Mihomo 常见协议及嵌套 Reality/WebSocket 字段应映射到统一结构。"""
+
+    content = """
+proxies:
+  - name: HK-Reality-WS
+    type: vless
+    server: hk.example.com
+    port: 443
+    uuid: uuid-reality
+    network: ws
+    security: reality
+    tls: true
+    servername: hk.example.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: public-key-value
+      short-id: short-id-value
+    ws-opts:
+      path: /reality
+      headers:
+        Host: cdn.example.com
+  - name: VM-JP
+    type: vmess
+    server: jp.example.com
+    port: 443
+    uuid: uuid-vmess
+    alterId: 2
+    cipher: auto
+    network: ws
+    tls: true
+    servername: jp.example.com
+    ws-opts:
+      path: /vmess
+      headers:
+        Host: vm.example.com
+  - name: US-Trojan
+    type: trojan
+    server: us.example.com
+    port: 443
+    password: trojan-password
+    servername: us.example.com
+    fingerprint: chrome
+    ws-opts:
+      path: /trojan
+      headers:
+        Host: tr.example.com
+  - name: SG-SS
+    type: ss
+    server: sg.example.com
+    port: 8388
+    cipher: aes-256-gcm
+    password: ss-password
+"""
+    nodes = parse_content(content, "clash")
+    assert [node.type for node in nodes] == [
+        "vless", "vmess", "trojan", "shadowsocks"
+    ]
+    reality, vmess, trojan, shadowsocks = nodes
+    assert (reality.tls, reality.security, reality.public_key, reality.short_id) == (
+        True, "reality", "public-key-value", "short-id-value"
+    )
+    assert (reality.sni, reality.path, reality.host, reality.fingerprint) == (
+        "hk.example.com", "/reality", "cdn.example.com", "chrome"
+    )
+    assert (vmess.uuid, vmess.path, vmess.host, vmess.tls) == (
+        "uuid-vmess", "/vmess", "vm.example.com", True
+    )
+    assert vmess.metadata["alterId"] == 2
+    assert (trojan.password, trojan.sni, trojan.path, trojan.host) == (
+        "trojan-password", "us.example.com", "/trojan", "tr.example.com"
+    )
+    assert trojan.tls is True
+    assert (shadowsocks.cipher, shadowsocks.password) == (
+        "aes-256-gcm", "ss-password"
+    )
+
+
+def test_parse_clash_vless_security_tls_enables_tls() -> None:
+    """Clash/Mihomo 的 VLESS security=tls 应推导出 tls=true。"""
+
+    nodes = parse_content(
+        """
+proxies:
+  - name: TLS-VLESS
+    type: vless
+    server: tls.example.com
+    port: 443
+    uuid: uuid-tls
+    security: tls
+""",
+        "clash",
+    )
+    assert len(nodes) == 1
+    assert nodes[0].security == "tls"
+    assert nodes[0].tls is True
 
 
 def test_unknown_content_raises() -> None:

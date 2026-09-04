@@ -41,6 +41,7 @@ class PackageRule(Base):
         ForeignKey("packages.id", ondelete="CASCADE"), unique=True, index=True, nullable=False
     )
     source_filter: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    node_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     country_filter: Mapped[list | None] = mapped_column(JSON, nullable=True)
     type_filter: Mapped[list | None] = mapped_column(JSON, nullable=True)
     include_keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)

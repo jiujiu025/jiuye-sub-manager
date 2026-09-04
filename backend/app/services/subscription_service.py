@@ -38,6 +38,7 @@ class SubscriptionService:
         rules = package.rules
         nodes = self.node_repo.list_enabled_with_filters(
             sources=(rules.source_filter or None) if rules else None,
+            node_ids=(rules.node_ids or None) if rules else None,
             countries=(rules.country_filter or None) if rules else None,
             types=(rules.type_filter or None) if rules else None,
             include_keywords=(rules.include_keywords or None) if rules else None,

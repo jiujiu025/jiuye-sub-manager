@@ -168,7 +168,7 @@ def test_manual_create_vmess_and_trojan(client: TestClient, auth_headers: dict) 
             "type": "vmess",
             "server": "manual-vmess.example.com",
             "port": 443,
-            "uuid": "manual-vmess-uuid",
+            "uuid": "00000000-0000-0000-0000-000000000006",
         },
         headers=auth_headers,
     )

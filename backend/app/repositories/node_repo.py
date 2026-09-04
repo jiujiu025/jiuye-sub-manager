@@ -84,6 +84,7 @@ class NodeRepository:
         self,
         *,
         sources: list[str] | None = None,
+        node_ids: list[int] | None = None,
         countries: list[str] | None = None,
         types: list[str] | None = None,
         include_keywords: list[str] | None = None,
@@ -92,8 +93,13 @@ class NodeRepository:
         """按套餐规则查询启用节点，关键词任一匹配即保留。"""
 
         conditions = [Node.enabled.is_(True)]
+        source_conditions = []
         if sources:
-            conditions.append(Node.source_name.in_(sources))
+            source_conditions.append(Node.source_name.in_(sources))
+        if node_ids:
+            source_conditions.append(Node.id.in_(node_ids))
+        if source_conditions:
+            conditions.append(or_(*source_conditions))
         if countries:
             conditions.append(Node.country.in_(countries))
         if types:

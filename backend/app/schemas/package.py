@@ -12,6 +12,7 @@ class PackageRulesPayload(BaseModel):
     """套餐规则：套餐不保存节点副本，只保存筛选与展示规则。"""
 
     source_filter: list[str] = Field(default_factory=list)
+    node_ids: list[int] = Field(default_factory=list)
     country_filter: list[str] = Field(default_factory=list)
     type_filter: list[str] = Field(default_factory=list)
     include_keywords: list[str] = Field(default_factory=list)
@@ -48,10 +49,11 @@ class PackageSummary(BaseModel):
     subscription_url: str | None = None
     created_at: datetime
     updated_at: datetime
+    rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
 
 
 class PackageDetail(PackageSummary):
-    rules: PackageRulesPayload
+    pass
 
 
 class PackageCreateResponse(PackageDetail):

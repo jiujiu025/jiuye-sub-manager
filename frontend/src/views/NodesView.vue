@@ -1,13 +1,14 @@
 <template>
   <div>
-    <div class="page-header">
-      <h2>节点池</h2>
-      <div>
-        <el-button :disabled="!selected.length" @click="batchAction('enable')">批量启用</el-button>
-        <el-button :disabled="!selected.length" @click="batchAction('disable')">批量禁用</el-button>
-        <el-button type="danger" :disabled="!selected.length" @click="batchAction('delete')">批量删除</el-button>
-        <el-button type="primary" @click="openCreate">添加自有节点</el-button>
-      </div>
+    <div class="filter-bar">
+      <div class="spacer" />
+      <el-button :disabled="!selected.length" @click="batchAction('enable')">批量启用</el-button>
+      <el-button :disabled="!selected.length" @click="batchAction('disable')">批量禁用</el-button>
+      <el-button type="danger" plain :disabled="!selected.length" @click="batchAction('delete')">批量删除</el-button>
+      <el-button type="primary" @click="openCreate">
+        <el-icon><Plus /></el-icon>
+        添加自有节点
+      </el-button>
     </div>
 
     <el-form inline class="filters">
@@ -62,6 +63,13 @@
           <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty>
+        <div class="empty-state">
+          <p class="empty-state-title">还没有节点</p>
+          <p class="empty-state-desc">导入上游节点或添加自有节点后，这里会显示统一节点池。</p>
+          <el-button type="primary" @click="openCreate">+ 添加自有节点</el-button>
+        </div>
+      </template>
     </el-table>
 
     <el-pagination
@@ -495,6 +503,10 @@ onMounted(load)
 </script>
 
 <style scoped>
+.spacer {
+  flex: 1;
+}
+
 .page-header {
   display: flex;
   align-items: center;

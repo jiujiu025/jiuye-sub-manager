@@ -5,14 +5,15 @@ from __future__ import annotations
 import base64
 from urllib.parse import quote
 
-import httpx
 import pytest
+from curl_cffi.requests import errors as curl_errors
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.source import Source
 from app.services.sync_service import SyncService
+from tests.fakes import FakeClient, FakeResponse
 
 
 @pytest.fixture
@@ -40,11 +41,8 @@ def _subscription(entries: list[tuple[str, str, str]]) -> str:
 
 
 def _mock_sync(db, source: Source, payload: str) -> None:
-    client = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, text=payload)
-        ),
-        timeout=5,
+    client = FakeClient(
+        lambda url, kwargs: FakeResponse(200, payload)
     )
     result = SyncService(db, http_client=client).sync_source(source)
     assert result.status == "success"
@@ -104,7 +102,7 @@ def test_full_acceptance_flow(client: TestClient, auth_headers: dict[str, str]) 
             "type": "vless",
             "server": "self-hk.example.com",
             "port": 443,
-            "uuid": "self-hk-uuid",
+            "uuid": "00000000-0000-0000-0000-000000000005",
         },
         headers=auth_headers,
     )
@@ -188,11 +186,10 @@ def test_full_acceptance_flow(client: TestClient, auth_headers: dict[str, str]) 
     try:
         source_b = db.scalar(select(Source).where(Source.name == "e2e机场B"))
         assert source_b is not None
-        timeout_client = httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: (_ for _ in ()).throw(httpx.ConnectTimeout("timeout"))
-            ),
-            timeout=5,
+        timeout_client = FakeClient(
+            lambda url, kwargs: (_ for _ in ()).throw(
+                curl_errors.RequestsError("Operation timed out")
+            )
         )
         result = SyncService(db, http_client=timeout_client).sync_source(source_b)
         assert result.status == "failed"
@@ -207,11 +204,8 @@ def test_full_acceptance_flow(client: TestClient, auth_headers: dict[str, str]) 
     try:
         source_b = db.scalar(select(Source).where(Source.name == "e2e机场B"))
         assert source_b is not None
-        empty_client = httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, text="")
-            ),
-            timeout=5,
+        empty_client = FakeClient(
+            lambda url, kwargs: FakeResponse(200, "")
         )
         result = SyncService(db, http_client=empty_client).sync_source(source_b)
         assert result.status == "failed"

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.models.node import Node
+from app.models.package import Package, PackageRule
 from app.models.source import Source
 from app.schemas.source import SyncResult
+from app.utils.fingerprint import build_node_fingerprint
 
 
 @pytest.fixture
@@ -44,6 +48,38 @@ def test_source_crud(client: TestClient, auth_headers: dict[str, str]) -> None:
     source_id = create_response.json()["id"]
     assert create_response.json()["url"] == "https://example.com/sub"
 
+    db = SessionLocal()
+    try:
+        node = Node(
+            source_id=source_id,
+            source_name="airport_api",
+            original_name="airport-api-node",
+            name="airport-api-node",
+            type="vless",
+            server="airport-api.example.com",
+            port=443,
+            uuid="airport-api-uuid",
+            node_fingerprint=build_node_fingerprint(
+                node_type="vless",
+                server="airport-api.example.com",
+                port=443,
+                uuid="airport-api-uuid",
+            ),
+        )
+        package = Package(
+            name="airport-api-package",
+            enabled=True,
+            token_hash="airport-api-package-hash",
+            token_prefix="airport-a",
+        )
+        db.add_all([node, package])
+        db.flush()
+        db.add(PackageRule(package_id=package.id, source_filter=["airport_api"]))
+        db.commit()
+        package_id = package.id
+    finally:
+        db.close()
+
     list_response = client.get("/api/sources", headers=auth_headers)
     assert list_response.status_code == 200
     assert list_response.json()["total"] >= 1
@@ -57,6 +93,17 @@ def test_source_crud(client: TestClient, auth_headers: dict[str, str]) -> None:
     )
     assert update_response.status_code == 200
     assert update_response.json()["name"] == "airport_api_renamed"
+
+    db = SessionLocal()
+    try:
+        renamed_node = db.scalar(select(Node).where(Node.source_id == source_id))
+        assert renamed_node is not None
+        assert renamed_node.source_name == "airport_api_renamed"
+        rule = db.scalar(select(PackageRule).where(PackageRule.package_id == package_id))
+        assert rule is not None
+        assert rule.source_filter == ["airport_api_renamed"]
+    finally:
+        db.close()
 
     delete_response = client.delete(f"/api/sources/{source_id}", headers=auth_headers)
     assert delete_response.status_code == 204

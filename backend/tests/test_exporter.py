@@ -88,6 +88,22 @@ def test_export_plain_vless_tls_unchanged() -> None:
     assert data["proxies"][0]["tls"] is False
 
 
+def test_export_vless_security_tls_enables_tls() -> None:
+    """VLESS security=tls 即使旧数据 tls 为空也应输出 tls=true。"""
+
+    node = _make_node(
+        name="TLS-01",
+        node_type="vless",
+        server="tls.example.com",
+        port=443,
+        uuid="uuid-tls",
+        security="tls",
+        tls=False,
+    )
+    data = yaml.safe_load(ClashExporter().export([(node, "TLS-01")]))
+    assert data["proxies"][0]["tls"] is True
+
+
 def test_export_shadowsocks() -> None:
     """Shadowsocks 节点应输出 ss 类型与加密字段。"""
 

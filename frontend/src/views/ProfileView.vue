@@ -1,7 +1,7 @@
 <template>
-  <div>
-    <h2>修改密码</h2>
-    <el-form label-width="120px" style="max-width: 420px">
+  <div class="page">
+    <div class="surface-card profile-card">
+    <el-form label-width="120px">
       <el-form-item label="旧密码">
         <el-input v-model="oldPassword" type="password" show-password />
       </el-form-item>
@@ -15,6 +15,7 @@
         <el-button type="primary" :loading="saving" @click="submit">修改密码</el-button>
       </el-form-item>
     </el-form>
+    </div>
   </div>
 </template>
 
@@ -54,3 +55,9 @@ async function submit() {
   }
 }
 </script>
+
+<style scoped>
+.profile-card {
+  max-width: 420px;
+}
+</style>

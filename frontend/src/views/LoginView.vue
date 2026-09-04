@@ -64,6 +64,8 @@ async function submit() {
 
 .login-card {
   width: 360px;
+  border-radius: var(--app-radius-lg);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
 }
 
 .login-title {

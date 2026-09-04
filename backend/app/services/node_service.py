@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
@@ -28,6 +30,17 @@ SUPPORTED_NODE_TYPES = {
     "tuic",
 }
 
+SUPPORTED_SS_CIPHERS = {
+    "aes-128-gcm",
+    "aes-192-gcm",
+    "aes-256-gcm",
+    "chacha20-ietf-poly1305",
+    "xchacha20-ietf-poly1305",
+    "2022-blake3-aes-128-gcm",
+    "2022-blake3-aes-256-gcm",
+    "2022-blake3-chacha20-poly1305",
+}
+
 
 def _validate_self_node(
     node_type: str,
@@ -39,16 +52,26 @@ def _validate_self_node(
 
     if node_type not in SUPPORTED_NODE_TYPES:
         raise BusinessError(f"不支持的自有节点协议：{node_type}")
-    if node_type in ("vless", "vmess", "tuic") and not uuid:
-        raise BusinessError(f"{node_type.upper()} 节点缺少 UUID")
+    if node_type in ("vless", "vmess", "tuic"):
+        if not uuid or not uuid.strip():
+            raise BusinessError(f"{node_type.upper()} 节点缺少 UUID")
+        try:
+            UUID(uuid.strip())
+        except (AttributeError, ValueError):
+            raise BusinessError(f"{node_type.upper()} 节点 UUID 格式无效") from None
     if node_type == "shadowsocks":
-        if not password:
+        if not password or not password.strip():
             raise BusinessError("Shadowsocks 节点缺少密码")
-        if not cipher:
+        normalized_cipher = (cipher or "").strip().lower()
+        if not normalized_cipher:
             raise BusinessError("Shadowsocks 节点缺少加密方式")
-    if node_type == "trojan" and not password:
+        if normalized_cipher not in SUPPORTED_SS_CIPHERS:
+            raise BusinessError(f"Shadowsocks 不支持的加密方式：{cipher}")
+    if node_type == "trojan" and (not password or not password.strip()):
         raise BusinessError("Trojan 节点缺少密码")
-    if node_type in ("hysteria", "hysteria2") and not password:
+    if node_type in ("hysteria", "hysteria2") and (
+        not password or not password.strip()
+    ):
         raise BusinessError(f"{node_type.upper()} 节点缺少认证密码")
 
 
@@ -158,6 +181,13 @@ class NodeService:
         """更新节点并重新计算指纹；与其他节点冲突时拒绝。"""
 
         data = payload.model_dump(exclude_unset=True)
+        final_type = data.get("type", node.type)
+        _validate_self_node(
+            final_type,
+            data.get("uuid", node.uuid),
+            data.get("password", node.password),
+            data.get("cipher", node.cipher),
+        )
         for key, value in data.items():
             setattr(node, key, value)
         if "country" not in data:

@@ -159,4 +159,6 @@ class NodeImportService:
                 entries.append((index, parse_uri_line(line, forced)))
             except ParseError as exc:
                 failures.append(ImportFailure(index=index, reason=str(exc)))
+            except ValueError:
+                failures.append(ImportFailure(index=index, reason="节点链接的服务器或端口无效"))
         return entries, failures

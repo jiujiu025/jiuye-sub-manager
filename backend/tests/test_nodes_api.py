@@ -43,10 +43,11 @@ def test_list_nodes_with_filter(client: TestClient, auth_headers: dict[str, str]
                 type="vless",
                 server="hk.example.com",
                 port=443,
-                uuid="uuid-secret",
+                uuid="00000000-0000-0000-0000-000000000001",
                 country="香港",
                 node_fingerprint=build_node_fingerprint(
-                    node_type="vless", server="hk.example.com", port=443, uuid="uuid-secret"
+                    node_type="vless", server="hk.example.com", port=443,
+                    uuid="00000000-0000-0000-0000-000000000001",
                 ),
             ),
             Node(
@@ -99,7 +100,7 @@ def test_create_self_vless_node(client: TestClient, auth_headers: dict[str, str]
             "type": "vless",
             "server": "my-hk.example.com",
             "port": 443,
-            "uuid": "my-uuid",
+            "uuid": "00000000-0000-0000-0000-000000000002",
             "network": "tcp",
             "security": "reality",
             "sni": "my-hk.example.com",
@@ -109,7 +110,7 @@ def test_create_self_vless_node(client: TestClient, auth_headers: dict[str, str]
     assert response.status_code == 201
     payload = response.json()
     assert payload["source_name"] == "自有节点"
-    assert payload["uuid"] == "my-uuid"
+    assert payload["uuid"] == "00000000-0000-0000-0000-000000000002"
     assert payload["country"] == "香港"
 
 
@@ -144,6 +145,144 @@ def test_create_self_node_missing_fields(
     assert ss_response.status_code == 400
 
 
+@pytest.mark.parametrize("uuid", ["not-a-uuid", "1234"])
+def test_create_self_vless_rejects_invalid_uuid(
+    client: TestClient, auth_headers: dict[str, str], uuid: str
+) -> None:
+    """创建 VLESS 节点时必须拒绝非法 UUID。"""
+
+    response = client.post(
+        "/api/nodes",
+        json={
+            "name": "invalid-vless-uuid",
+            "type": "vless",
+            "server": "example.com",
+            "port": 443,
+            "uuid": uuid,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert "UUID" in response.json()["detail"]
+
+
+def test_create_self_shadowsocks_rejects_invalid_cipher(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """创建 Shadowsocks 节点时必须拒绝项目白名单之外的 cipher。"""
+
+    response = client.post(
+        "/api/nodes",
+        json={
+            "name": "invalid-ss-cipher",
+            "type": "shadowsocks",
+            "server": "example.com",
+            "port": 8388,
+            "password": "password",
+            "cipher": "unsupported-cipher",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert "不支持的加密方式" in response.json()["detail"]
+
+
+def test_import_invalid_uri_is_reported_without_blocking_valid_nodes(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """非法端口应成为失败项，不能阻断同批合法节点。"""
+
+    response = client.post(
+        "/api/nodes/import",
+        json={
+            "format": "uri",
+            "content": (
+                "vless://uuid-valid@hk-import.example.com:443#HK-valid\n"
+                "vless://uuid-invalid@bad.example.com:bad#bad"
+            ),
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["success"] == 1
+    assert payload["failed"] == 1
+    assert payload["failures"][0]["index"] == 2
+    assert "端口" in payload["failures"][0]["reason"]
+
+
+def test_update_self_node_revalidates_protocol_fields(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """节点编辑不能清空 VLESS UUID 或 Shadowsocks 关键字段。"""
+
+    vless = client.post(
+        "/api/nodes",
+        json={
+            "name": "edit-vless",
+            "type": "vless",
+            "server": "edit-vless.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-0000-0000-000000000003",
+        },
+        headers=auth_headers,
+    )
+    assert vless.status_code == 201
+    invalid_vless = client.put(
+        f"/api/nodes/{vless.json()['id']}",
+        json={"uuid": ""},
+        headers=auth_headers,
+    )
+    assert invalid_vless.status_code == 400
+    assert "UUID" in invalid_vless.json()["detail"]
+
+    invalid_vless_format = client.put(
+        f"/api/nodes/{vless.json()['id']}",
+        json={"uuid": "invalid-vless-uuid"},
+        headers=auth_headers,
+    )
+    assert invalid_vless_format.status_code == 400
+    assert "UUID" in invalid_vless_format.json()["detail"]
+
+    shadowsocks = client.post(
+        "/api/nodes",
+        json={
+            "name": "edit-ss",
+            "type": "shadowsocks",
+            "server": "edit-ss.example.com",
+            "port": 8388,
+            "password": "ss-password",
+            "cipher": "aes-256-gcm",
+        },
+        headers=auth_headers,
+    )
+    assert shadowsocks.status_code == 201
+    invalid_ss = client.put(
+        f"/api/nodes/{shadowsocks.json()['id']}",
+        json={"cipher": ""},
+        headers=auth_headers,
+    )
+    assert invalid_ss.status_code == 400
+    assert "加密方式" in invalid_ss.json()["detail"]
+
+    invalid_ss_cipher = client.put(
+        f"/api/nodes/{shadowsocks.json()['id']}",
+        json={"cipher": "unsupported-cipher"},
+        headers=auth_headers,
+    )
+    assert invalid_ss_cipher.status_code == 400
+    assert "不支持的加密方式" in invalid_ss_cipher.json()["detail"]
+
+    valid_update = client.put(
+        f"/api/nodes/{shadowsocks.json()['id']}",
+        json={"cipher": "CHACHA20-IETF-POLY1305", "password": "new-password"},
+        headers=auth_headers,
+    )
+    assert valid_update.status_code == 200
+    assert valid_update.json()["cipher"] == "CHACHA20-IETF-POLY1305"
+
+
 def test_self_node_replaces_upstream(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -159,13 +298,13 @@ def test_self_node_replaces_upstream(
             type="vless",
             server="dup-self-only.example.com",
             port=443,
-            uuid="dup-uuid",
+            uuid="00000000-0000-0000-0000-000000000004",
             country="香港",
             node_fingerprint=build_node_fingerprint(
                 node_type="vless",
                 server="dup-self-only.example.com",
                 port=443,
-                uuid="dup-uuid",
+                uuid="00000000-0000-0000-0000-000000000004",
             ),
         )
         db.add(upstream)
@@ -180,7 +319,7 @@ def test_self_node_replaces_upstream(
             "type": "vless",
             "server": "dup-self-only.example.com",
             "port": 443,
-            "uuid": "dup-uuid",
+            "uuid": "00000000-0000-0000-0000-000000000004",
         },
         headers=auth_headers,
     )

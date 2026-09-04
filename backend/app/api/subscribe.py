@@ -23,7 +23,7 @@ def _subscription_disposition(package) -> str:
     encoded = quote(name, safe="")
     return (
         'attachment; filename="subscription.yaml"; '
-        f"filename*=UTF-8''{encoded}.yaml"
+        f"filename*=UTF-8''{encoded}"
     )
 
 

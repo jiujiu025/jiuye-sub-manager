@@ -61,7 +61,14 @@ def test_package_crud_and_token(
 
     list_response = client.get("/api/packages", headers=auth_headers)
     assert list_response.status_code == 200
-    assert any(item["id"] == package_id for item in list_response.json())
+    listed = next(item for item in list_response.json() if item["id"] == package_id)
+    assert listed["rules"]["country_filter"] == ["香港"]
+    assert listed["rules"]["source_filter"] == []
+    assert listed["rules"]["include_keywords"] == []
+    assert listed["rules"]["exclude_keywords"] == []
+    assert listed["rules"]["rename_rules"] == []
+    assert listed["rules"]["sort_rules"] == []
+    assert listed["rules"]["node_ids"] == []
 
     detail_response = client.get(f"/api/packages/{package_id}", headers=auth_headers)
     assert detail_response.status_code == 200
@@ -168,3 +175,16 @@ def test_package_preview_api(
     assert len(preview) == 1
     assert preview[0]["name"] == "HK01"
     assert preview[0]["country"] == "香港"
+
+
+def test_create_package_empty_name_rejected(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """套餐名称为空时创建套餐应返回 422。"""
+
+    response = client.post(
+        "/api/packages",
+        json={"name": ""},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
