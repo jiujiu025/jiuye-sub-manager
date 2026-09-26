@@ -292,6 +292,9 @@ def test_default_curl_request_pins_checked_dns_result(
     assert FakePinnedCurl.options[CurlOpt.RESOLVE] == [
         "provider.example.com:443:93.184.216.34"
     ]
+    assert FakePinnedCurl.options[CurlOpt.HTTPHEADER] == [
+        b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ]
 
 
 def test_sync_rejects_mixed_public_and_private_dns_answers(

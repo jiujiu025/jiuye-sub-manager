@@ -153,8 +153,12 @@ def _pinned_curl_get(
         curl.setopt(CurlOpt.URL, url)
         curl.setopt(CurlOpt.WRITEFUNCTION, write_body)
         curl.setopt(CurlOpt.HEADERDATA, raw_headers)
-        headers = [f"User-Agent: {user_agent}"]
-        headers.extend(f"{key}: {value}" for key, value in (request_headers or {}).items())
+        # curl_cffi 0.16.x 的 HTTPHEADER 选项要求每个请求头使用 bytes。
+        headers = [f"User-Agent: {user_agent}".encode("utf-8")]
+        headers.extend(
+            f"{key}: {value}".encode("utf-8")
+            for key, value in (request_headers or {}).items()
+        )
         curl.setopt(CurlOpt.HTTPHEADER, headers)
         curl.setopt(CurlOpt.TIMEOUT_MS, max(1, int(timeout_seconds * 1000)))
         curl.setopt(CurlOpt.CONNECTTIMEOUT_MS, max(1, int(timeout_seconds * 1000)))
