@@ -126,62 +126,72 @@ def _pinned_curl_get(
     user_agent: str,
     request_headers: dict[str, str] | None = None,
 ) -> curl_requests.Response:
-    """使用 CURLOPT_RESOLVE 固定已校验解析结果，阻断 DNS rebinding。"""
+    """逐个使用已校验地址请求，阻断 DNS rebinding 并兼容 IPv4/IPv6。"""
 
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").strip().lower().rstrip(".")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    resolve_entries = []
-    for address in resolved_addresses:
+    # 先尝试 IPv4，避免服务器 IPv6 路由不可用时阻塞正常的 IPv4 上游。
+    ordered_addresses = sorted(
+        resolved_addresses,
+        key=lambda address: ":" in address,
+    )
+    last_error: CurlError | None = None
+
+    for address in ordered_addresses:
+        body = BytesIO()
+        raw_headers = BytesIO()
+        too_large = False
+
+        def write_body(chunk: bytes) -> int:
+            nonlocal too_large
+            if body.tell() + len(chunk) > _MAX_UPSTREAM_BYTES:
+                too_large = True
+                return 0
+            body.write(chunk)
+            return len(chunk)
+
         formatted = f"[{address}]" if ":" in address else address
-        resolve_entries.append(f"{hostname}:{port}:{formatted}")
-
-    body = BytesIO()
-    raw_headers = BytesIO()
-    too_large = False
-
-    def write_body(chunk: bytes) -> int:
-        nonlocal too_large
-        if body.tell() + len(chunk) > _MAX_UPSTREAM_BYTES:
-            too_large = True
-            return 0
-        body.write(chunk)
-        return len(chunk)
-
-    curl = Curl()
-    try:
-        curl.setopt(CurlOpt.URL, url)
-        curl.setopt(CurlOpt.WRITEFUNCTION, write_body)
-        curl.setopt(CurlOpt.HEADERDATA, raw_headers)
-        # curl_cffi 0.16.x 的 HTTPHEADER 选项要求每个请求头使用 bytes。
-        headers = [f"User-Agent: {user_agent}".encode("utf-8")]
-        headers.extend(
-            f"{key}: {value}".encode("utf-8")
-            for key, value in (request_headers or {}).items()
-        )
-        curl.setopt(CurlOpt.HTTPHEADER, headers)
-        curl.setopt(CurlOpt.TIMEOUT_MS, max(1, int(timeout_seconds * 1000)))
-        curl.setopt(CurlOpt.CONNECTTIMEOUT_MS, max(1, int(timeout_seconds * 1000)))
-        curl.setopt(CurlOpt.FOLLOWLOCATION, False)
-        curl.setopt(CurlOpt.SSL_VERIFYPEER, 1)
-        curl.setopt(CurlOpt.SSL_VERIFYHOST, 2)
-        curl.setopt(CurlOpt.RESOLVE, resolve_entries)
+        resolve_entries = [f"{hostname}:{port}:{formatted}"]
+        curl = Curl()
         try:
-            curl.perform()
-        except CurlError as exc:
-            if too_large:
-                raise ParseError("上游订阅内容超过 10MB 限制") from exc
-            raise
+            curl.setopt(CurlOpt.URL, url)
+            curl.setopt(CurlOpt.WRITEFUNCTION, write_body)
+            curl.setopt(CurlOpt.HEADERDATA, raw_headers)
+            # curl_cffi 0.16.x 的 HTTPHEADER 选项要求每个请求头使用 bytes。
+            headers = [f"User-Agent: {user_agent}".encode("utf-8")]
+            headers.extend(
+                f"{key}: {value}".encode("utf-8")
+                for key, value in (request_headers or {}).items()
+            )
+            curl.setopt(CurlOpt.HTTPHEADER, headers)
+            curl.setopt(CurlOpt.TIMEOUT_MS, max(1, int(timeout_seconds * 1000)))
+            curl.setopt(CurlOpt.CONNECTTIMEOUT_MS, max(1, int(timeout_seconds * 1000)))
+            curl.setopt(CurlOpt.FOLLOWLOCATION, False)
+            curl.setopt(CurlOpt.SSL_VERIFYPEER, 1)
+            curl.setopt(CurlOpt.SSL_VERIFYHOST, 2)
+            curl.setopt(CurlOpt.RESOLVE, resolve_entries)
+            try:
+                curl.perform()
+            except CurlError as exc:
+                if too_large:
+                    raise ParseError("上游订阅内容超过 10MB 限制") from exc
+                last_error = exc
+                continue
 
-        response = curl_requests.Response(curl)
-        response.url = url
-        response.status_code = int(curl.getinfo(CurlInfo.RESPONSE_CODE))
-        response.ok = 200 <= response.status_code < 400
-        response.content = body.getvalue()
-        response.headers = _parse_response_headers(raw_headers.getvalue())
-        return response
-    finally:
-        curl.close()
+            response = curl_requests.Response(curl)
+            response.url = url
+            response.status_code = int(curl.getinfo(CurlInfo.RESPONSE_CODE))
+            response.ok = 200 <= response.status_code < 400
+            response.content = body.getvalue()
+            response.headers = _parse_response_headers(raw_headers.getvalue())
+            return response
+        finally:
+            curl.close()
+
+    if last_error is not None:
+        raise last_error
+    raise ParseError("上游地址解析结果为空")
 
 
 def _classify_error(exc: Exception) -> str:

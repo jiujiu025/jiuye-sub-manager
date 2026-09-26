@@ -297,6 +297,111 @@ def test_default_curl_request_pins_checked_dns_result(
     ]
 
 
+def test_default_curl_request_prefers_ipv4_over_unavailable_ipv6(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IPv4 可用时不能被不可用的 IPv6 地址阻塞。"""
+
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (None, None, None, None, ("2001:4860:4860::8888", 443)),
+            (None, None, None, None, ("93.184.216.34", 443)),
+        ],
+    )
+
+    class FakePinnedCurl:
+        resolve_attempts: list[list[str]] = []
+
+        def __init__(self):
+            self.options: dict[object, object] = {}
+            self.writer = None
+            self.headers = None
+
+        def setopt(self, option, value):
+            self.options[option] = value
+            if option == CurlOpt.WRITEFUNCTION:
+                self.writer = value
+            elif option == CurlOpt.HEADERDATA:
+                self.headers = value
+
+        def perform(self):
+            resolve = self.options[CurlOpt.RESOLVE]
+            self.__class__.resolve_attempts.append(resolve)
+            self.headers.write(b"HTTP/1.1 200 OK\r\n\r\n")
+            self.writer(b"feed")
+
+        def getinfo(self, _info):
+            return 200
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.services.sync_service.Curl", FakePinnedCurl)
+    service = SyncService(db_session)
+
+    assert service._fetch("https://provider.example.com/sub") == "feed"
+    assert FakePinnedCurl.resolve_attempts == [
+        ["provider.example.com:443:93.184.216.34"]
+    ]
+
+
+def test_default_curl_request_falls_back_to_ipv6(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没有可用 IPv4 时，已校验的 IPv6 地址仍然可以使用。"""
+
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (None, None, None, None, ("2001:4860:4860::8888", 443)),
+            (None, None, None, None, ("93.184.216.34", 443)),
+        ],
+    )
+
+    class FakeCurlError(Exception):
+        pass
+
+    class FakePinnedCurl:
+        resolve_attempts: list[list[str]] = []
+
+        def __init__(self):
+            self.options: dict[object, object] = {}
+            self.writer = None
+            self.headers = None
+
+        def setopt(self, option, value):
+            self.options[option] = value
+            if option == CurlOpt.WRITEFUNCTION:
+                self.writer = value
+            elif option == CurlOpt.HEADERDATA:
+                self.headers = value
+
+        def perform(self):
+            resolve = self.options[CurlOpt.RESOLVE]
+            self.__class__.resolve_attempts.append(resolve)
+            if ":93.184.216.34" in resolve[0]:
+                raise FakeCurlError("IPv4 unavailable")
+            self.headers.write(b"HTTP/1.1 200 OK\r\n\r\n")
+            self.writer(b"feed")
+
+        def getinfo(self, _info):
+            return 200
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.services.sync_service.Curl", FakePinnedCurl)
+    monkeypatch.setattr("app.services.sync_service.CurlError", FakeCurlError)
+    service = SyncService(db_session)
+
+    assert service._fetch("https://provider.example.com/sub") == "feed"
+    assert FakePinnedCurl.resolve_attempts == [
+        ["provider.example.com:443:93.184.216.34"],
+        ["provider.example.com:443:[2001:4860:4860::8888]"],
+    ]
+
+
 def test_sync_rejects_mixed_public_and_private_dns_answers(
     db_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
