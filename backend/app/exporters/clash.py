@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import yaml
 
-from app.exporters.base import BaseExporter
+from app.exporters.base import (
+    BaseExporter,
+    exportable_items_for_format,
+    unique_display_names,
+)
 from app.models.node import Node
 
 
@@ -16,11 +20,19 @@ class ClashExporter(BaseExporter):
         items: list[tuple[Node, str]],
         subscription_name: str | None = None,
     ) -> str:
-        proxies = [self._to_proxy(node, name) for node, name in items]
+        safe_items = unique_display_names(
+            exportable_items_for_format(items, "clash")
+        )
+        proxies = [self._to_proxy(node, name) for node, name in safe_items]
+        names = [name for _, name in safe_items]
         data: dict = {}
         if subscription_name:
             data["sub-name"] = subscription_name
         data["proxies"] = proxies
+        data["proxy-groups"] = [
+            {"name": "Proxy", "type": "select", "proxies": names}
+        ]
+        data["rules"] = ["MATCH,Proxy"]
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
     @staticmethod
@@ -33,6 +45,8 @@ class ClashExporter(BaseExporter):
             return ClashExporter._to_vmess(node, name)
         if node.type == "trojan":
             return ClashExporter._to_trojan(node, name)
+        if node.type == "anytls":
+            return ClashExporter._to_anytls(node, name)
         if node.type == "socks":
             return ClashExporter._to_socks(node, name)
         if node.type == "http":
@@ -158,6 +172,27 @@ class ClashExporter(BaseExporter):
         ws_opts = ClashExporter._ws_opts(node)
         if ws_opts:
             proxy["ws-opts"] = ws_opts
+        return proxy
+
+    @staticmethod
+    def _to_anytls(node: Node, name: str) -> dict:
+        """输出 Mihomo AnyTLS 通用字段，避免把 URI 参数直接塞入 YAML。"""
+
+        proxy: dict = {
+            "name": name,
+            "type": "anytls",
+            "server": node.server,
+            "port": node.port,
+            "password": node.password,
+            "udp": True,
+        }
+        if node.sni:
+            proxy["sni"] = node.sni
+        if node.fingerprint:
+            proxy["client-fingerprint"] = node.fingerprint
+        metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+        if str(metadata.get("insecure", "")).lower() in {"1", "true", "yes"}:
+            proxy["skip-cert-verify"] = True
         return proxy
 
     @staticmethod

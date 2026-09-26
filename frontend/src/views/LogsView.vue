@@ -1,12 +1,20 @@
 <template>
-  <div>
-    <el-tabs v-model="kind" @tab-change="load">
-      <el-tab-pane label="同步日志" name="sync" />
-      <el-tab-pane label="订阅请求" name="subscription" />
-      <el-tab-pane label="管理员操作" name="admin" />
-      <el-tab-pane label="系统日志" name="system" />
-      <el-tab-pane label="错误日志" name="error" />
-    </el-tabs>
+  <div class="page logs-page">
+    <div class="page-header">
+      <div>
+        <h2 class="page-title">系统日志</h2>
+        <p class="page-subtitle">追踪同步、订阅访问、管理员操作与系统异常。</p>
+      </div>
+      <div class="page-header-mark"><el-icon><Document /></el-icon><span>ACTIVITY</span></div>
+    </div>
+    <div class="surface-card logs-surface">
+      <el-tabs v-model="kind" @tab-change="load">
+        <el-tab-pane label="同步日志" name="sync" />
+        <el-tab-pane label="订阅请求" name="subscription" />
+        <el-tab-pane label="管理员操作" name="admin" />
+        <el-tab-pane label="系统日志" name="system" />
+        <el-tab-pane label="错误日志" name="error" />
+      </el-tabs>
 
     <el-table v-if="kind === 'sync'" :data="rows" v-loading="loading">
       <el-table-column prop="id" label="ID" width="70" />
@@ -48,19 +56,20 @@
       </el-table-column>
     </el-table>
 
-    <el-card v-else class="log-card">
-      <pre class="log-lines">{{ logText }}</pre>
-    </el-card>
+      <el-card v-else class="log-card">
+        <pre class="log-lines">{{ logText }}</pre>
+      </el-card>
 
-    <el-pagination
-      v-if="kind !== 'system' && kind !== 'error'"
-      class="pagination"
-      layout="total, prev, pager, next"
-      :total="total"
-      :page-size="pageSize"
-      :current-page="page"
-      @current-change="(value) => { page = value; load() }"
-    />
+      <el-pagination
+        v-if="kind !== 'system' && kind !== 'error'"
+        class="pagination"
+        layout="total, prev, pager, next"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="page"
+        @current-change="(value) => { page = value; load() }"
+      />
+    </div>
   </div>
 </template>
 
@@ -111,6 +120,16 @@ onMounted(load)
 .log-card {
   background: #111827;
   color: #d1d5db;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+}
+
+.logs-surface {
+  padding-top: 12px;
+}
+
+.logs-surface :deep(.el-table) {
+  margin-top: 2px;
 }
 
 .log-lines {

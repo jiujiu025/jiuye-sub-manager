@@ -120,6 +120,40 @@ def test_package_filter_and_keywords(db_session) -> None:
     assert len(preview) == 0
 
 
+def test_package_empty_keywords_are_ignored(db_session) -> None:
+    """空关键词不能变成匹配全部或排除全部。"""
+
+    _add_node(
+        db_session,
+        name="空关键词节点",
+        node_type="vless",
+        server="empty-keyword.example.com",
+        port=443,
+        source_name="空关键词来源",
+        country="香港",
+        uuid="empty-keyword-uuid",
+    )
+    db_session.commit()
+    node_id = db_session.scalar(
+        select(Node.id).where(Node.server == "empty-keyword.example.com")
+    )
+    package, _ = PackageService(db_session).create(
+        PackageCreate(
+            name="空关键词套餐",
+            rules={
+                "node_ids": [node_id],
+                "include_keywords": ["", "   "],
+                "exclude_keywords": [""],
+            },
+        ),
+        _admin(db_session),
+    )
+
+    assert package.rules.include_keywords == []
+    assert package.rules.exclude_keywords == []
+    assert len(PackageService(db_session).preview(package)) == 1
+
+
 def test_package_rename_and_numbering(db_session) -> None:
     """重命名规则应支持替换、国家缩写与按地区编号。"""
 

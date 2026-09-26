@@ -417,3 +417,30 @@ def test_package_api_saves_and_returns_node_ids(
     )
     assert updated.status_code == 200
     assert updated.json()["rules"]["node_ids"] == []
+
+
+def test_deleting_node_cleans_package_node_ids(db_session) -> None:
+    """删除节点时必须同步清理套餐中的节点 ID，避免后续 ID 复用串套餐。"""
+
+    node = _add_node(
+        db_session,
+        name="待删除节点",
+        server="delete-node.example.com",
+        uuid="delete-node-uuid",
+        source_name="自有节点",
+    )
+    package_service = PackageService(db_session)
+    package, _ = package_service.create(
+        PackageCreate(name="删除节点清理套餐", rules={"node_ids": [node.id]}),
+        _admin(db_session),
+    )
+
+    from app.services.node_service import NodeService
+
+    NodeService(db_session).delete(node, _admin(db_session))
+    db_session.expire_all()
+    rule = db_session.scalar(
+        select(PackageRule).where(PackageRule.package_id == package.id)
+    )
+    assert rule is not None
+    assert rule.node_ids == []

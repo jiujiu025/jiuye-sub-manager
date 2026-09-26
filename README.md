@@ -1,6 +1,6 @@
 # 订阅聚合与节点分发系统
 
-私有的「订阅聚合 + 节点管理 + 套餐分发」系统。支持多个合法授权的上游订阅、统一节点池、自有 VLESS/SS 节点、套餐筛选规则、独立订阅 Token，以及 Clash/Mihomo 订阅输出。
+私有的「订阅聚合 + 节点管理 + 套餐分发」系统。支持多个合法授权的上游订阅、统一节点池、自有节点、套餐筛选规则、独立订阅 Token，以及多客户端订阅输出。
 
 ## 核心原则
 
@@ -13,14 +13,17 @@
 ## 功能
 
 - 多上游订阅管理：新增、修改、删除、启用/禁用、手动/定时同步
-- 订阅解析：Base64、Clash YAML、VLESS URI、Shadowsocks URI，自动格式检测
+- 订阅解析：Base64、Clash/Mihomo YAML、Sing-box JSON、VLESS/VMess/SS/Trojan/AnyTLS URI，自动格式检测
 - 同步安全：staging → validate → commit，失败保留旧节点，空订阅默认视为异常
 - 统一节点池：标准化 Node Model、节点指纹去重、来源优先级
-- 自有节点：VLESS、Shadowsocks
+- 自有节点：VLESS、VMess、Shadowsocks、Trojan、AnyTLS，以及 SOCKS/HTTP/Hysteria/TUIC 扩展类型
 - 套餐规则：来源/地区/类型/关键词筛选、重命名、排序
 - 独立订阅 Token：高强度随机、数据库只存 SHA-256 哈希、可重生成
 - Clash/Mihomo 输出：只输出解析后的 `proxies`
 - 缓存：订阅 YAML TTL 缓存，同步/规则变更后主动清理
+- 订阅刷新：响应头建议兼容客户端每 3600 秒重新拉取，服务端来源同步周期独立可配置
+- 套餐到期：订阅接口绕过旧缓存，仅返回不可连接的续费提示线路
+- 节点分享：管理员可从节点列表复制单节点标准 URI
 - 后台：概览、上游订阅、节点池、套餐管理、系统日志
 
 ## 技术栈
@@ -108,6 +111,7 @@ docker compose up -d --build
 - 去重优先级：自有节点最高，其余来源按 `dedup_source_priority` 或创建顺序
 - 国家识别基于节点名称关键词，后续可扩展 GeoIP
 - 订阅 Token 仅在创建/重生成时显示一次，数据库只保存哈希
+- 套餐到期后服务端不再返回真实节点；已支持响应头的客户端会按 3600 秒建议间隔刷新
 - 生产环境日志会过滤 UUID、密码、完整 VLESS URL、上游 URL、Token
 - 订阅输出顶层的 `sub-name` 是机场订阅常见的扩展字段，并非所有 Clash/Mihomo 客户端都支持显示；未在真实客户端验证前不保证显示效果，订阅 URL 与节点内容不受该字段影响
 

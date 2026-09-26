@@ -8,7 +8,7 @@ from app.core.cache import cache_service
 from app.models.node import Node
 from app.models.user import User
 from app.parsers import parse_content
-from app.parsers.base import ParseError, ParsedNode
+from app.parsers.base import ParseError, ParsedNode, validate_parsed_node
 from app.parsers.detector import decode_base64, detect_format
 from app.parsers.uri_parser import parse_uri_line
 from app.repositories.log_repo import LogRepository
@@ -28,6 +28,7 @@ _FORCED_URI_FORMATS = (
     "hysteria",
     "hysteria2",
     "tuic",
+    "anytls",
 )
 
 
@@ -137,12 +138,23 @@ class NodeImportService:
             return self._parse_lines(content.splitlines())
         if actual_format in _FORCED_URI_FORMATS:
             return self._parse_lines(content.splitlines(), forced=actual_format)
-        if actual_format in ("clash", "singbox"):
+        if actual_format == "v2ray":
+            actual_format = "v2ray-json"
+        if actual_format in ("clash", "singbox", "v2ray-json"):
             try:
                 nodes = parse_content(content, actual_format)
-            except ParseError as exc:
+            except (ParseError, TypeError, ValueError, AttributeError) as exc:
                 return [], [ImportFailure(index=1, reason=str(exc))]
-            return [(index, node) for index, node in enumerate(nodes, start=1)], []
+            entries: list[tuple[int, ParsedNode]] = []
+            failures: list[ImportFailure] = []
+            for index, node in enumerate(nodes, start=1):
+                try:
+                    validate_parsed_node(node)
+                except ParseError as exc:
+                    failures.append(ImportFailure(index=index, reason=str(exc)))
+                    continue
+                entries.append((index, node))
+            return entries, failures
         return [], [ImportFailure(index=1, reason="无法识别输入格式")]
 
     @staticmethod
@@ -156,9 +168,11 @@ class NodeImportService:
             if not line:
                 continue
             try:
-                entries.append((index, parse_uri_line(line, forced)))
+                node = parse_uri_line(line, forced)
+                validate_parsed_node(node)
+                entries.append((index, node))
             except ParseError as exc:
                 failures.append(ImportFailure(index=index, reason=str(exc)))
-            except ValueError:
-                failures.append(ImportFailure(index=index, reason="节点链接的服务器或端口无效"))
+            except (TypeError, ValueError, AttributeError):
+                failures.append(ImportFailure(index=index, reason="节点链接结构无效"))
         return entries, failures

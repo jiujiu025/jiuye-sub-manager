@@ -65,6 +65,7 @@ class NodeCreate(BaseModel):
         "hysteria",
         "hysteria2",
         "tuic",
+        "anytls",
     ] = "vless"
     server: str = Field(min_length=1, max_length=255)
     port: int = Field(gt=0, lt=65536)
@@ -122,7 +123,7 @@ class NodeBatchRequest(BaseModel):
 class NodeImportRequest(BaseModel):
     """自有节点批量导入请求。"""
 
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=2_000_000)
     source_subtype: Literal["custom_url", "custom_import"] = "custom_url"
     format: str = "auto"
 
@@ -140,6 +141,16 @@ class NodeImportResult(BaseModel):
     duplicate: int
     failed: int
     failures: list[ImportFailure]
+
+
+class NodeExportResponse(BaseModel):
+    """单节点分享链接响应。"""
+
+    node_id: int
+    name: str
+    type: str
+    format: str
+    content: str
 
 
 class NodeDetail(ORMModel):

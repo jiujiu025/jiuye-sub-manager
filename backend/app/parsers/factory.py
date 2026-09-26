@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.parsers.base import ParseError, ParsedNode
+from app.parsers.anytls_parser import parse_anytls_uri
 from app.parsers.base64_parser import Base64Parser
 from app.parsers.clash_parser import ClashParser
 from app.parsers.detector import detect_format, detect_uri_type
@@ -13,6 +14,7 @@ from app.parsers.singbox_parser import SingboxParser
 from app.parsers.socks_parser import parse_socks_uri
 from app.parsers.ss_parser import parse_ss_uri
 from app.parsers.trojan_parser import parse_trojan_uri
+from app.parsers.v2ray_json_parser import V2RayJsonParser
 from app.parsers.tuic_parser import parse_tuic_uri
 from app.parsers.uri_parser import parse_uri_lines
 from app.parsers.vless_parser import parse_vless_uri
@@ -27,6 +29,7 @@ class ParserFactory:
             "base64": Base64Parser(),
             "clash": ClashParser(),
             "singbox": SingboxParser(),
+            "v2ray-json": V2RayJsonParser(),
         }
 
     def parse(self, content: str, fmt: str = "auto") -> list[ParsedNode]:
@@ -49,7 +52,9 @@ class ParserFactory:
             return [parse_socks_uri(line) for line in content.strip().splitlines() if line.strip()]
         if actual_format == "http":
             return [parse_http_uri(line) for line in content.strip().splitlines() if line.strip()]
-        parser = self._parsers.get(actual_format)
+        if actual_format == "anytls":
+            return [parse_anytls_uri(line) for line in content.strip().splitlines() if line.strip()]
+        parser = self._parsers.get("v2ray-json" if actual_format == "v2ray" else actual_format)
         if parser is None:
             raise ParseError(f"不支持的订阅格式: {actual_format}")
         return parser.parse(content)

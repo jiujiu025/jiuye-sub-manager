@@ -83,6 +83,117 @@ def test_import_vmess(client: TestClient, auth_headers: dict) -> None:
     assert nodes["items"][0]["uuid_masked"] is not None
 
 
+def test_import_vmess_urlsafe_without_padding(client: TestClient, auth_headers: dict) -> None:
+    """V2Ray 常见 URL-safe 无填充 VMess 链接应返回正常导入结果。"""
+
+    data = {
+        "v": "2",
+        "ps": "V2Ray URL-safe",
+        "add": "v2ray-url-safe.example.com",
+        "port": "443",
+        "id": "uuid-v2ray-url-safe",
+        "net": "ws",
+        "host": "cdn.example.com",
+        "path": "/ws",
+        "tls": "tls",
+    }
+    payload = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+    response = _import(client, auth_headers, f"vmess://{payload}")
+    assert response.status_code == 200
+    assert response.json()["success"] == 1
+
+
+def test_import_mixed_vmess_keeps_valid_node(client: TestClient, auth_headers: dict) -> None:
+    """非法 VMess 不应阻断同批次的合法节点。"""
+
+    content = "\n".join(["vmess://bad", _vmess_uri("valid-vmess.example.com", "uuid-valid")])
+    response = _import(client, auth_headers, content)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"] == 1
+    assert result["failed"] == 1
+
+
+def test_import_v2ray_json_config(client: TestClient, auth_headers: dict) -> None:
+    """V2Ray outbounds.vnext JSON 应能作为配置导入。"""
+
+    content = json.dumps(
+        {
+            "outbounds": [
+                {
+                    "tag": "V2Ray JSON",
+                    "protocol": "vmess",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": "v2ray-json-import.example.com",
+                                "port": "443",
+                                "users": [{"id": "uuid-v2ray-json"}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {"network": "tcp", "security": "tls"},
+                }
+            ]
+        }
+    )
+    response = client.post(
+        "/api/nodes/import",
+        json={"content": content, "source_subtype": "custom_import", "format": "auto"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["success"] == 1
+
+
+def test_import_v2ray_json_reality_with_bom(client: TestClient, auth_headers: dict) -> None:
+    """HTTP 导入应支持带 BOM 的 V2Ray VLESS Reality 配置。"""
+
+    content = "\ufeff" + json.dumps(
+        {
+            "outbounds": [
+                {
+                    "tag": "V2Ray Reality",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": "v2ray-reality-import.example.com",
+                                "port": "443",
+                                "users": [{"id": "uuid-v2ray-reality"}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "tcp",
+                        "security": "reality",
+                        "realitySettings": {
+                            "serverName": "reality.example.com",
+                            "publicKey": "public-key",
+                            "shortId": "short-id",
+                        },
+                    },
+                }
+            ]
+        }
+    )
+    response = client.post(
+        "/api/nodes/import",
+        json={"content": content, "source_subtype": "custom_import", "format": "auto"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"] == 1
+    assert result["failed"] == 0
+
+    nodes = client.get(
+        "/api/nodes?node_type=vless&keyword=v2ray-reality-import.example.com",
+        headers=auth_headers,
+    ).json()
+    assert nodes["items"][0]["security"] == "reality"
+
+
 def test_import_shadowsocks(client: TestClient, auth_headers: dict) -> None:
     uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@ss-import.example.com:8388#%E6%97%A5%E6%9C%AC01"
     result = _import(client, auth_headers, uri).json()
@@ -131,6 +242,59 @@ def test_import_invalid_link_reports_failure(client: TestClient, auth_headers: d
     assert "uuid" not in result["failures"][0]["reason"].lower()
 
 
+def test_import_invalid_clash_node_reports_failure(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """Clash 中缺少协议关键字段的节点不能伪装成成功导入。"""
+
+    response = client.post(
+        "/api/nodes/import",
+        json={
+            "format": "clash",
+            "source_subtype": "custom_import",
+            "content": (
+                "proxies:\n"
+                "  - name: invalid-vless\n"
+                "    type: vless\n"
+                "    server: invalid.example.com\n"
+                "    port: 443\n"
+            ),
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"] == 0
+    assert result["failed"] == 1
+    assert "UUID" in result["failures"][0]["reason"]
+
+
+def test_import_invalid_singbox_nested_structure_reports_failure(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """Sing-box 嵌套字段类型错误时应返回失败项，而不是 500。"""
+
+    response = client.post(
+        "/api/nodes/import",
+        json={
+            "format": "singbox",
+            "source_subtype": "custom_import",
+            "content": (
+                '{"outbounds":[{"type":"vless","tag":"invalid",'
+                '"server":"invalid.example.com","server_port":443,'
+                '"uuid":"00000000-0000-4000-8000-000000000001",'
+                '"tls":{"enabled":true,"reality":"invalid"}}]}'
+            ),
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"] == 0
+    assert result["failed"] == 1
+    assert "Reality" in result["failures"][0]["reason"]
+
+
 def test_import_mixed_protocols(client: TestClient, auth_headers: dict) -> None:
     content = "\n".join(
         [
@@ -158,6 +322,13 @@ def test_import_partial_failure(client: TestClient, auth_headers: dict) -> None:
     assert result["success"] == 1
     assert result["failed"] == 1
     assert result["failures"][0]["index"] == 2
+
+
+def test_import_rejects_oversized_content(client: TestClient, auth_headers: dict) -> None:
+    """节点导入正文超过上限时应在请求校验阶段拒绝。"""
+
+    response = _import(client, auth_headers, "vless://" + "a" * 2_000_001)
+    assert response.status_code == 422
 
 
 def test_manual_create_vmess_and_trojan(client: TestClient, auth_headers: dict) -> None:

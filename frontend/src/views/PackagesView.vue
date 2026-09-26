@@ -3,9 +3,10 @@
     <div class="page-header">
       <div>
         <h2 class="page-title">套餐管理</h2>
-        <p class="page-subtitle">管理订阅来源、过滤规则和生成的订阅</p>
+        <p class="page-subtitle">管理订阅来源、过滤规则和生成的订阅。</p>
       </div>
       <div class="page-actions">
+        <div class="page-header-mark"><el-icon><Tickets /></el-icon><span>SUBSCRIPTIONS</span></div>
         <el-button @click="load">
           <el-icon><Refresh /></el-icon>
           刷新
@@ -39,27 +40,16 @@
     <div
       v-loading="loading"
       class="package-grid"
-      style="display: flex; flex-wrap: wrap; gap: 16px; min-height: 200px"
     >
       <div
-        v-for="pkg in filteredPackages"
+        v-for="(pkg, index) in filteredPackages"
         :key="pkg.id"
         class="package-card"
-        style="
-          flex: 1 1 520px;
-          max-width: 100%;
-          background: #ffffff;
-          border: 1px solid #e6e8eb;
-          border-radius: 14px;
-          padding: 24px;
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        "
       >
         <div class="package-head">
           <div>
             <div class="package-name">
+              <span class="package-index">#{{ index + 1 }}</span>
               {{ pkg.name }}
               <el-tag
                 :type="pkg.enabled ? 'success' : 'info'"
@@ -68,6 +58,14 @@
                 size="small"
               >
                 {{ pkg.enabled ? '开启' : '禁用' }}
+              </el-tag>
+              <el-tag
+                :type="isExpired(pkg) ? 'danger' : 'warning'"
+                effect="light"
+                round
+                size="small"
+              >
+                {{ expirationLabel(pkg) }}
               </el-tag>
             </div>
           </div>
@@ -79,16 +77,23 @@
             <div class="meta-value">{{ pkg.subscription_name }}</div>
           </div>
           <div class="meta-block">
+            <div class="meta-label">Token 名称</div>
+            <div class="meta-value">{{ pkg.token_name || '未命名' }}</div>
+          </div>
+          <div class="meta-block">
             <div class="meta-label">订阅源</div>
             <div class="meta-value">{{ summaryOf(pkg).sourceCount }} 个</div>
+            <div v-if="missingSourcesOf(pkg).length" class="source-warning">
+              已删除：{{ missingSourcesOf(pkg).join('、') }}
+            </div>
           </div>
           <div class="meta-block">
             <div class="meta-label">当前可用节点</div>
             <div
-              v-if="!pkg.subscription_url"
+              v-if="pkg.token_revoked_at"
               class="meta-value no-nodes"
             >
-              未生成订阅
+              Token 已吊销
             </div>
             <div
               v-else-if="(packageNodeCounts[pkg.id] ?? 0) > 0"
@@ -171,6 +176,7 @@
       v-model="dialogVisible"
       :title="editing ? '编辑套餐' : '新建套餐'"
       width="720px"
+      append-to-body
     >
       <p class="dialog-subtitle">通过规则组合订阅源，生成独立的 Clash/Mihomo 订阅。</p>
       <el-form label-position="top">
@@ -178,15 +184,42 @@
           <el-form-item label="套餐名称" required style="flex: 1">
             <el-input v-model="form.name" placeholder="请输入套餐名称" />
           </el-form-item>
-          <el-form-item label="订阅显示名称" style="flex: 1">
-            <el-input v-model="form.subscription_name" placeholder="留空默认使用套餐名称" />
-          </el-form-item>
+        <el-form-item label="订阅显示名称" style="flex: 1">
+          <el-input v-model="form.subscription_name" placeholder="留空默认使用套餐名称" />
+        </el-form-item>
+        <el-form-item label="Token 名称">
+          <el-input v-model="form.token_name" placeholder="例如：手机主订阅、电脑备用订阅" />
+          <div class="form-hint">仅用于后台识别，不会改变订阅 Token 本身。</div>
+        </el-form-item>
         </div>
         <el-form-item label="说明">
           <el-input v-model="form.description" placeholder="选填" />
         </el-form-item>
+        <el-form-item label="归属用户">
+          <el-select v-model="form.owner_user_id" clearable placeholder="不指定则仅管理员管理" style="width: 100%">
+            <el-option
+              v-for="user in userOptions"
+              :key="user.id"
+              :label="user.username"
+              :value="user.id"
+            />
+          </el-select>
+          <div class="form-hint">普通用户登录后只能看到分配给自己的套餐。</div>
+        </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
+        </el-form-item>
+        <el-form-item label="到期时间">
+          <el-date-picker
+            v-model="form.expires_at"
+            type="datetime"
+            format="YYYY-MM-DD HH:mm:ss"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+            placeholder="留空表示永不过期"
+            clearable
+            style="width: 100%"
+          />
+          <div class="form-hint">到期后订阅只返回不可连接的续费提示线路，旧缓存不会继续生效。</div>
         </el-form-item>
 
         <el-divider content-position="left">筛选规则</el-divider>
@@ -206,6 +239,9 @@
                   </el-checkbox>
                 </el-checkbox-group>
                 <div v-if="!sourceOptions.length" class="form-hint">暂无订阅源</div>
+              </div>
+              <div v-if="missingFormSources.length" class="source-warning">
+                当前套餐仍保留已删除来源：{{ missingFormSources.join('、') }}。这些来源不会扩大为全部来源，清除后才会从筛选规则中移除。
               </div>
               <div class="source-actions">
                 <el-button size="small" @click="selectAllSources">全选</el-button>
@@ -252,7 +288,10 @@
         <el-form-item label="类型">
           <el-select v-model="form.rules.type_filter" multiple clearable style="width: 100%">
             <el-option label="VLESS" value="vless" />
+            <el-option label="VMess" value="vmess" />
             <el-option label="Shadowsocks" value="shadowsocks" />
+            <el-option label="Trojan" value="trojan" />
+            <el-option label="AnyTLS" value="anytls" />
           </el-select>
         </el-form-item>
 
@@ -396,7 +435,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" title="套餐节点预览" width="760px">
+    <el-dialog v-model="previewVisible" title="套餐节点预览" width="760px" append-to-body>
       <el-table :data="previewRows" max-height="480">
         <el-table-column prop="name" label="名称" min-width="140" />
         <el-table-column prop="type" label="类型" width="100" />
@@ -407,7 +446,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="qrVisible" title="订阅二维码" width="380px">
+    <el-dialog v-model="qrVisible" title="订阅二维码" width="380px" append-to-body>
       <div class="qr-body">
         <img v-if="qrDataUrl" :src="qrDataUrl" alt="订阅二维码" class="qr-image" />
         <div class="qr-url">{{ qrUrl }}</div>
@@ -424,11 +463,13 @@ import QRCode from 'qrcode'
 import {
   createPackage,
   deletePackage,
+  getPackageSubscriptionUrl,
   getPackage,
   listPackages,
   listNodes,
   listSources,
   previewPackage,
+  listUsers,
   regenerateToken,
   togglePackage,
   updatePackage
@@ -442,6 +483,8 @@ const countryOptions = [
 
 const packages = ref([])
 const sourceOptions = ref([])
+const sourcesLoaded = ref(false)
+const userOptions = ref([])
 const packageNodeCounts = ref({})
 const loading = ref(false)
 const saving = ref(false)
@@ -476,8 +519,11 @@ const extraSortRules = ref([])
 const form = reactive({
   name: '',
   subscription_name: '',
+  token_name: '',
   description: '',
   enabled: true,
+  expires_at: null,
+  owner_user_id: null,
   rules: {
     source_filter: [],
     node_ids: [],
@@ -510,6 +556,12 @@ const filteredSelfNodes = computed(() => {
     const text = `${node.name} ${node.server} ${node.country || ''}`.toLowerCase()
     return text.includes(keyword)
   })
+})
+
+const missingFormSources = computed(() => {
+  if (!sourcesLoaded.value) return []
+  const availableSources = new Set(sourceOptions.value)
+  return form.rules.source_filter.filter((source) => !availableSources.has(source))
 })
 
 function resetRuleForms() {
@@ -594,6 +646,12 @@ function summaryOf(pkg) {
   }
 }
 
+function missingSourcesOf(pkg) {
+  if (!sourcesLoaded.value) return []
+  const availableSources = new Set(sourceOptions.value)
+  return (pkg.rules?.source_filter || []).filter((source) => !availableSources.has(source))
+}
+
 async function load() {
   loading.value = true
   try {
@@ -622,6 +680,12 @@ async function refreshNodeCounts() {
 async function loadSources() {
   const { data } = await listSources()
   sourceOptions.value = data.items.map((item) => item.name)
+  sourcesLoaded.value = true
+}
+
+async function loadUsers() {
+  const { data } = await listUsers()
+  userOptions.value = data.filter((user) => user.role === 'user' && user.is_active)
 }
 
 async function loadSelfNodes() {
@@ -647,8 +711,11 @@ function resetForm() {
   Object.assign(form, {
     name: '',
     subscription_name: '',
+    token_name: '',
     description: '',
     enabled: true,
+    expires_at: null,
+    owner_user_id: null,
     rules: {
       source_filter: [],
       node_ids: [],
@@ -661,6 +728,36 @@ function resetForm() {
   includeKeywordInput.value = ''
   excludeKeywordInput.value = ''
   resetRuleForms()
+}
+
+function padNumber(value) {
+  return String(value).padStart(2, '0')
+}
+
+function formatDatePickerValue(value) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return [
+    date.getFullYear(),
+    padNumber(date.getMonth() + 1),
+    padNumber(date.getDate())
+  ].join('-') + `T${padNumber(date.getHours())}:${padNumber(date.getMinutes())}:${padNumber(date.getSeconds())}`
+}
+
+function toUtcIso(value) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function isExpired(pkg) {
+  return Boolean(pkg.expires_at && new Date(pkg.expires_at).getTime() <= Date.now())
+}
+
+function expirationLabel(pkg) {
+  if (!pkg.expires_at) return '长期有效'
+  return isExpired(pkg) ? '已到期' : `有效至 ${formatTime(pkg.expires_at)}`
 }
 
 function openCreate() {
@@ -677,8 +774,11 @@ async function openEdit(row) {
   Object.assign(form, {
     name: data.name,
     subscription_name: data.subscription_name || '',
+    token_name: data.token_name || '',
     description: data.description || '',
     enabled: data.enabled,
+    expires_at: formatDatePickerValue(data.expires_at),
+    owner_user_id: data.owner_user_id,
     rules: {
       source_filter: data.rules.source_filter || [],
       node_ids: data.rules.node_ids || [],
@@ -746,6 +846,7 @@ async function save() {
   try {
     const payload = {
       ...form,
+      expires_at: toUtcIso(form.expires_at),
       rules: {
         ...form.rules,
         rename_rules,
@@ -761,7 +862,6 @@ async function save() {
         '套餐已创建（Token 仅显示一次）',
         { confirmButtonText: '我已保存' }
       )
-      await load()
     }
     dialogVisible.value = false
     ElMessage.success(editing.value ? '套餐已更新' : '套餐创建成功')
@@ -772,16 +872,13 @@ async function save() {
 }
 
 async function copyUrl(row) {
-  if (!row.subscription_url) {
-    ElMessage.warning('请先刷新 Token')
-    return
-  }
   if ((packageNodeCounts.value[row.id] ?? 0) <= 0) {
     ElMessage.warning('当前套餐暂无可用节点')
     return
   }
   try {
-    await navigator.clipboard.writeText(row.subscription_url)
+    const { data } = await getPackageSubscriptionUrl(row.id)
+    await navigator.clipboard.writeText(data.subscription_url)
     ElMessage.success('订阅地址已复制')
   } catch {
     ElMessage.error('复制失败，请手动复制')
@@ -789,20 +886,21 @@ async function copyUrl(row) {
 }
 
 async function showQr(row) {
-  if (!row.subscription_url) {
-    ElMessage.warning('请先刷新 Token')
-    return
-  }
   if ((packageNodeCounts.value[row.id] ?? 0) <= 0) {
     ElMessage.warning('当前套餐暂无可用节点')
     return
   }
-  qrUrl.value = row.subscription_url
-  qrDataUrl.value = await QRCode.toDataURL(row.subscription_url, {
-    width: 240,
-    margin: 1
-  })
-  qrVisible.value = true
+  try {
+    const { data } = await getPackageSubscriptionUrl(row.id)
+    qrUrl.value = data.subscription_url
+    qrDataUrl.value = await QRCode.toDataURL(data.subscription_url, {
+      width: 240,
+      margin: 1
+    })
+    qrVisible.value = true
+  } catch {
+    ElMessage.error('订阅地址或二维码生成失败')
+  }
 }
 
 async function copyQrUrl() {
@@ -865,6 +963,7 @@ function formatTime(value) {
 onMounted(() => {
   load()
   loadSources()
+  loadUsers()
   loadSelfNodes()
 })
 </script>
@@ -892,10 +991,18 @@ onMounted(() => {
 }
 
 .package-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
   min-height: 200px;
 }
 
 .package-card {
+  flex: 1 1 520px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -912,6 +1019,11 @@ onMounted(() => {
   font-size: 19px;
   font-weight: 700;
   color: var(--app-text);
+}
+
+.package-index {
+  color: var(--app-text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .package-sub {
@@ -944,6 +1056,14 @@ onMounted(() => {
   font-weight: 600;
   color: var(--app-text);
   word-break: break-all;
+}
+
+.source-warning {
+  margin-top: 6px;
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .no-nodes {
@@ -1004,6 +1124,10 @@ onMounted(() => {
 .source-check-list {
   max-height: 220px;
   overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.source-group > .source-warning {
   margin-bottom: 8px;
 }
 

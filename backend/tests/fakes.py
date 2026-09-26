@@ -4,9 +4,12 @@ from __future__ import annotations
 
 
 class FakeResponse:
-    def __init__(self, status_code: int = 200, text: str = "") -> None:
+    def __init__(
+        self, status_code: int = 200, text: str = "", headers: dict[str, str] | None = None
+    ) -> None:
         self.status_code = status_code
         self.text = text
+        self.headers = headers or {}
         self.ok = 200 <= status_code < 400
 
 

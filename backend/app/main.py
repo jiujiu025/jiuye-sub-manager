@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     admin,
+    auth,
     dashboard,
     health,
     logs,
@@ -18,6 +19,7 @@ from app.api import (
     settings as settings_api,
     sources,
     subscribe,
+    users,
 )
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
@@ -56,6 +58,8 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(admin.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
 app.include_router(sources.router, prefix="/api")
 app.include_router(nodes.router, prefix="/api")
 app.include_router(packages.router, prefix="/api")

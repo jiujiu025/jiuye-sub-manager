@@ -1,5 +1,12 @@
 <template>
-  <div>
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <h2 class="page-title">节点管理</h2>
+        <p class="page-subtitle">统一查看、筛选、编辑与导出当前节点池。</p>
+      </div>
+      <div class="page-header-mark"><el-icon><Grid /></el-icon><span>NODE POOL</span></div>
+    </div>
     <div class="filter-bar">
       <div class="spacer" />
       <el-button :disabled="!selected.length" @click="batchAction('enable')">批量启用</el-button>
@@ -11,6 +18,7 @@
       </el-button>
     </div>
 
+    <div class="surface-card node-filters-card">
     <el-form inline class="filters">
       <el-form-item label="关键词">
         <el-input v-model="filters.keyword" clearable placeholder="名称/服务器" @keyup.enter="load" />
@@ -32,12 +40,14 @@
         <el-button type="primary" @click="load">查询</el-button>
       </el-form-item>
     </el-form>
+    </div>
 
-    <el-table
-      :data="rows"
-      v-loading="loading"
-      @selection-change="(items) => (selected = items.map((item) => item.id))"
-    >
+    <div class="surface-card node-table-card">
+      <el-table
+        :data="rows"
+        v-loading="loading"
+        @selection-change="(items) => (selected = items.map((item) => item.id))"
+      >
       <el-table-column type="selection" width="45" />
       <el-table-column prop="name" label="名称" min-width="150" />
       <el-table-column prop="type" label="类型" width="110" />
@@ -57,9 +67,18 @@
           <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" @click="shareNode(row)">
+            <el-icon><Share /></el-icon>
+            分享
+          </el-button>
+          <el-button
+            v-if="row.source_id === null && row.source_type !== 'upstream'"
+            size="small"
+            type="primary"
+            @click="openEdit(row)"
+          >编辑</el-button>
           <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -70,7 +89,23 @@
           <el-button type="primary" @click="openCreate">+ 添加自有节点</el-button>
         </div>
       </template>
-    </el-table>
+      </el-table>
+    </div>
+
+    <el-dialog v-model="shareVisible" title="节点分享链接" width="620px" append-to-body>
+      <div class="share-node-name">{{ shareNodeName }}</div>
+      <el-input
+        v-model="shareContent"
+        type="textarea"
+        :rows="4"
+        readonly
+        resize="none"
+      />
+      <template #footer>
+        <el-button @click="shareVisible = false">关闭</el-button>
+        <el-button type="primary" @click="copyShareContent">复制链接</el-button>
+      </template>
+    </el-dialog>
 
     <el-pagination
       class="pagination"
@@ -81,14 +116,14 @@
       @current-change="(value) => { page = value; load() }"
     />
 
-    <el-dialog v-model="dialogVisible" :title="editing ? '编辑节点' : '添加自有节点'" width="760px">
+    <el-dialog v-model="dialogVisible" :title="editing ? '编辑节点' : '添加自有节点'" width="760px" append-to-body>
       <el-tabs v-if="!editing" v-model="activeTab">
         <el-tab-pane label="链接导入" name="url">
           <el-input
             v-model="importUrlText"
             type="textarea"
             :rows="8"
-            placeholder="每行粘贴一条节点链接，支持 vless:// vmess:// ss:// trojan:// socks:// http:// hysteria:// hysteria2:// tuic://"
+            placeholder="每行粘贴一条节点链接，支持 vless:// vmess:// ss:// trojan:// anytls:// socks:// http:// hysteria:// hysteria2:// tuic://"
           />
           <div class="import-actions">
             <el-button type="primary" :loading="importing" @click="doImport('custom_url')">导入链接</el-button>
@@ -112,7 +147,7 @@
             v-model="importConfigText"
             type="textarea"
             :rows="8"
-            placeholder="粘贴 Clash/Mihomo YAML、Base64 节点列表或 Sing-box JSON"
+            placeholder="粘贴 Clash/Mihomo YAML、Base64 节点列表、VMess/V2Ray JSON 或 Sing-box JSON"
           />
           <div class="import-actions">
             <el-button type="primary" :loading="importing" @click="doImport('custom_import')">导入配置</el-button>
@@ -179,6 +214,11 @@
               <el-form-item label="SNI"><el-input v-model="form.sni" /></el-form-item>
               <el-form-item label="Path"><el-input v-model="form.path" /></el-form-item>
               <el-form-item label="Host"><el-input v-model="form.host" /></el-form-item>
+            </template>
+            <template v-else-if="form.type === 'anytls'">
+              <el-form-item label="密码"><el-input v-model="form.password" show-password /></el-form-item>
+              <el-form-item label="SNI"><el-input v-model="form.sni" /></el-form-item>
+              <el-form-item label="指纹"><el-input v-model="form.fingerprint" placeholder="chrome" /></el-form-item>
             </template>
             <template v-else-if="form.type === 'socks' || form.type === 'http'">
               <el-form-item label="用户名"><el-input v-model="form.username" /></el-form-item>
@@ -252,6 +292,11 @@
           <el-form-item label="Path"><el-input v-model="form.path" /></el-form-item>
           <el-form-item label="Host"><el-input v-model="form.host" /></el-form-item>
         </template>
+        <template v-else-if="form.type === 'anytls'">
+          <el-form-item label="密码"><el-input v-model="form.password" show-password /></el-form-item>
+          <el-form-item label="SNI"><el-input v-model="form.sni" /></el-form-item>
+          <el-form-item label="指纹"><el-input v-model="form.fingerprint" placeholder="chrome" /></el-form-item>
+        </template>
         <template v-else-if="form.type === 'socks' || form.type === 'http'">
           <el-form-item label="用户名"><el-input v-model="form.username" /></el-form-item>
           <el-form-item label="密码"><el-input v-model="form.password" show-password /></el-form-item>
@@ -296,6 +341,7 @@ import {
   batchNodes,
   createNode,
   deleteNode,
+  exportNode,
   getNode,
   importNodes,
   listNodes,
@@ -313,6 +359,7 @@ const protocolOptions = [
   { label: 'VMess', value: 'vmess' },
   { label: 'Shadowsocks', value: 'shadowsocks' },
   { label: 'Trojan', value: 'trojan' },
+  { label: 'AnyTLS', value: 'anytls' },
   { label: 'SOCKS', value: 'socks' },
   { label: 'HTTP', value: 'http' },
   { label: 'Hysteria', value: 'hysteria' },
@@ -329,6 +376,9 @@ const saving = ref(false)
 const importing = ref(false)
 const selected = ref([])
 const dialogVisible = ref(false)
+const shareVisible = ref(false)
+const shareContent = ref('')
+const shareNodeName = ref('')
 const editing = ref(null)
 const activeTab = ref('url')
 const importUrlText = ref('')
@@ -487,6 +537,22 @@ async function remove(row) {
   await load()
 }
 
+async function shareNode(row) {
+  const { data } = await exportNode(row.id)
+  shareNodeName.value = data.name
+  shareContent.value = data.content
+  shareVisible.value = true
+}
+
+async function copyShareContent() {
+  try {
+    await navigator.clipboard.writeText(shareContent.value)
+    ElMessage.success('节点链接已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
 async function batchAction(action) {
   const label = { enable: '启用', disable: '禁用', delete: '删除' }[action]
   if (action === 'delete') {
@@ -514,7 +580,16 @@ onMounted(load)
 }
 
 .filters {
-  margin-bottom: 8px;
+  margin-bottom: -18px;
+}
+
+.node-filters-card {
+  margin-bottom: 16px;
+  padding-bottom: 6px;
+}
+
+.node-table-card {
+  padding: 12px 16px 16px;
 }
 
 .pagination {
@@ -537,5 +612,30 @@ onMounted(load)
   padding-left: 20px;
   color: #dc2626;
   font-size: 12px;
+}
+
+.share-node-name {
+  margin-bottom: 12px;
+  color: var(--app-text-secondary);
+}
+
+@media (max-width: 768px) {
+  .node-filters-card {
+    padding-bottom: 0;
+  }
+
+  .filters {
+    margin-bottom: 0;
+  }
+
+  .filters .el-form-item {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .filters .el-input,
+  .filters .el-select {
+    width: 100%;
+  }
 }
 </style>

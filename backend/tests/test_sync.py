@@ -5,15 +5,22 @@ from __future__ import annotations
 import base64
 
 import pytest
+from curl_cffi import CurlOpt
 from curl_cffi.requests import errors as curl_errors
 from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.core.cache import cache_service
 from app.db import SessionLocal
 from app.models.log import SyncLog
 from app.models.source import Source
 from app.repositories.node_repo import NodeRepository
 from app.services.sync_service import SyncService
+from app.services.subscription_service import SubscriptionService
+from app.models.package import Package, PackageRule
+from app.models.user import User
+from app.schemas.source import SourceUpdate
+from app.services.source_service import SourceService
 from tests.fakes import FakeClient, FakeResponse
 
 
@@ -195,8 +202,160 @@ def test_sync_client_uses_timeout_verify_and_user_agent(db_session) -> None:
     settings = get_settings()
     assert call["timeout"] == settings.http_timeout_seconds
     assert call["verify"] is True
-    assert call["allow_redirects"] is True
+    assert call["allow_redirects"] is False
     assert call["headers"]["User-Agent"] == settings.upstream_user_agent
+
+
+def test_sync_uses_conditional_headers_and_preserves_nodes_on_304(db_session) -> None:
+    """上游未变化时使用 ETag/Last-Modified，304 不重建节点。"""
+
+    source = _create_source(db_session, "airport_conditional")
+    first_client = FakeClient(
+        lambda url, kwargs: FakeResponse(
+            text=_valid_subscription("conditional"),
+            headers={"etag": '"v1"', "last-modified": "Wed, 01 Jan 2025 00:00:00 GMT"},
+        )
+    )
+    assert SyncService(db_session, http_client=first_client).sync_source(source).status == "success"
+    old_version = source.version
+    old_node_ids = {node.id for node in NodeRepository(db_session).list_by_source(source.id)}
+
+    second_client = FakeClient(
+        lambda url, kwargs: FakeResponse(status_code=304, headers={})
+    )
+    result = SyncService(db_session, http_client=second_client).sync_source(source)
+
+    assert result.status == "success"
+    assert result.node_count == 2
+    assert source.version == old_version
+    assert {node.id for node in NodeRepository(db_session).list_by_source(source.id)} == old_node_ids
+    assert second_client.calls[0]["headers"]["If-None-Match"] == '"v1"'
+    assert second_client.calls[0]["headers"]["If-Modified-Since"] == "Wed, 01 Jan 2025 00:00:00 GMT"
+    assert source.consecutive_failures == 0
+
+
+def test_source_target_change_clears_conditional_cache(db_session) -> None:
+    """来源地址或格式变化后不得把旧 ETag 发送给新内容。"""
+
+    source = _create_source(db_session, "airport_change_target")
+    source.etag = '"old"'
+    source.last_modified = "Wed, 01 Jan 2025 00:00:00 GMT"
+    db_session.commit()
+    admin = db_session.scalar(select(User).where(User.username == "admin"))
+
+    assert admin is not None
+    SourceService(db_session).update(
+        source,
+        SourceUpdate(url="https://new-provider.example.com/sub"),
+        admin,
+    )
+    assert source.etag is None
+    assert source.last_modified is None
+
+
+def test_default_curl_request_pins_checked_dns_result(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """默认 curl 请求必须把已校验的公网解析结果固定到本次连接。"""
+
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))],
+    )
+
+    class FakePinnedCurl:
+        options: dict[object, object] = {}
+        writer = None
+        headers = None
+
+        def setopt(self, option, value):
+            self.options[option] = value
+            if option == CurlOpt.WRITEFUNCTION:
+                self.writer = value
+            elif option == CurlOpt.HEADERDATA:
+                self.headers = value
+
+        def perform(self):
+            self.headers.write(b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\n\r\n")
+            self.writer(b"feed")
+
+        def getinfo(self, _info):
+            return 200
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.services.sync_service.Curl", FakePinnedCurl)
+    service = SyncService(db_session)
+
+    assert service._fetch("https://provider.example.com/sub") == "feed"
+    assert FakePinnedCurl.options[CurlOpt.RESOLVE] == [
+        "provider.example.com:443:93.184.216.34"
+    ]
+
+
+def test_sync_rejects_mixed_public_and_private_dns_answers(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """域名任一解析结果为内网地址时必须整体拒绝，避免解析漂移绕过。"""
+
+    source = _create_source(db_session, "airport_mixed_dns")
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (None, None, None, None, ("93.184.216.34", 443)),
+            (None, None, None, None, ("169.254.169.254", 443)),
+        ],
+    )
+    result = SyncService(
+        db_session, http_client=_client_with(_valid_subscription("mixed-dns"))
+    ).sync_source(source)
+
+    assert result.status == "failed"
+    assert "内网" in (result.error or "")
+
+
+def test_sync_rejects_private_redirect_target(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """重定向到内网地址时必须在请求前阻断。"""
+
+    source = _create_source(db_session, "airport_private_redirect")
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))],
+    )
+    client = FakeClient(
+        lambda url, kwargs: FakeResponse(
+            status_code=302,
+            headers={"location": "http://127.0.0.1/private"},
+        )
+    )
+
+    result = SyncService(db_session, http_client=client).sync_source(source)
+
+    assert result.status == "failed"
+    assert "内网" in (result.error or "")
+    assert len(client.calls) == 1
+
+
+def test_sync_rejects_dns_resolved_private_target(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """域名解析到内网地址时也必须阻断。"""
+
+    source = _create_source(db_session, "airport_private_dns")
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("10.0.0.8", 443))],
+    )
+    client = _client_with(_valid_subscription("private-dns"))
+
+    result = SyncService(db_session, http_client=client).sync_source(source)
+
+    assert result.status == "failed"
+    assert "内网" in (result.error or "")
+    assert client.calls == []
 
 
 def test_sync_empty_content_keeps_old_nodes_by_default(db_session) -> None:
@@ -214,6 +373,71 @@ def test_sync_empty_content_keeps_old_nodes_by_default(db_session) -> None:
     db_session.refresh(source)
     assert source.node_count == 2
     assert NodeRepository(db_session).count_by_source(source.id) == 2
+
+
+def test_failed_sync_keeps_existing_subscription_cache(db_session) -> None:
+    """同步失败时不得递增节点版本或清空上一次成功的订阅缓存。"""
+
+    cache_service.invalidate_all()
+    source = _create_source(db_session, "airport_cached_failure")
+    success_client = _client_with(_valid_subscription("cached-failure"))
+    assert SyncService(db_session, http_client=success_client).sync_source(source).status == "success"
+
+    package = Package(id=987654, token_hash="a" * 64, name="缓存测试套餐")
+    cache_value = ("cached-subscription", 2)
+    SubscriptionService.set_cached(package, cache_value[0], "clash", cache_value[1])
+    assert SubscriptionService.get_cached_entry(package) == cache_value
+
+    result = SyncService(
+        db_session, http_client=_client_with("error", status=404)
+    ).sync_source(source)
+
+    assert result.status == "failed"
+    assert SubscriptionService.get_cached_entry(package) == cache_value
+
+
+def test_successful_sync_invalidates_related_cache_only(db_session) -> None:
+    """同步成功时只失效受影响来源的套餐缓存。"""
+
+    cache_service.invalidate_all()
+    source = _create_source(db_session, "airport_precise_cache")
+    other_source_name = "airport_unrelated_cache"
+    assert SyncService(
+        db_session, http_client=_client_with(_valid_subscription("precise-cache"))
+    ).sync_source(source).status == "success"
+
+    related = Package(
+        name="相关缓存套餐",
+        token_hash="c" * 64,
+        token_prefix="related",
+    )
+    unrelated = Package(
+        name="无关缓存套餐",
+        token_hash="d" * 64,
+        token_prefix="unrelated",
+    )
+    db_session.add_all([related, unrelated])
+    db_session.flush()
+    db_session.add_all(
+        [
+            PackageRule(package_id=related.id, source_filter=[source.name]),
+            PackageRule(package_id=unrelated.id, source_filter=[other_source_name]),
+        ]
+    )
+    db_session.commit()
+    related_cache = ("related-cache", 2)
+    unrelated_cache = ("unrelated-cache", 3)
+    SubscriptionService.set_cached(related, related_cache[0], "clash", related_cache[1])
+    SubscriptionService.set_cached(
+        unrelated, unrelated_cache[0], "clash", unrelated_cache[1]
+    )
+
+    assert SyncService(
+        db_session, http_client=_client_with(_valid_subscription("precise-cache-new"))
+    ).sync_source(source).status == "success"
+
+    assert SubscriptionService.get_cached_entry(related) is None
+    assert SubscriptionService.get_cached_entry(unrelated) == unrelated_cache
 
 
 def test_sync_empty_content_override_clears_nodes(db_session) -> None:
@@ -289,3 +513,32 @@ def test_sync_commit_failure_rolls_back_replacement_and_cross_source_delete(
     assert old_source.node_count == 2
     assert new_source.node_count == 0
     assert new_source.version == 0
+
+
+def test_sync_invalid_protocol_node_keeps_previous_successful_nodes(db_session) -> None:
+    """解析出缺少关键字段的节点时，同步失败且保留旧节点。"""
+
+    source = _create_source(db_session, "airport_invalid_protocol")
+    valid = _valid_subscription("before-invalid")
+    assert SyncService(
+        db_session, http_client=_client_with(valid)
+    ).sync_source(source).status == "success"
+
+    malformed = (
+        "proxies:\n"
+        "  - name: invalid-vless\n"
+        "    type: vless\n"
+        "    server: invalid.example.com\n"
+        "    port: 443\n"
+    )
+    result = SyncService(
+        db_session, http_client=_client_with(malformed)
+    ).sync_source(source)
+
+    assert result.status == "failed"
+    assert "UUID" in (result.error or "")
+    assert NodeRepository(db_session).count_by_source(source.id) == 2
+    assert all(
+        node.server != "invalid.example.com"
+        for node in NodeRepository(db_session).list_by_source(source.id)
+    )

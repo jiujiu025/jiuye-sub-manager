@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PackageRulesPayload(BaseModel):
@@ -20,12 +20,28 @@ class PackageRulesPayload(BaseModel):
     rename_rules: list[dict[str, Any]] = Field(default_factory=list)
     sort_rules: list[dict[str, Any]] = Field(default_factory=list)
 
+    @field_validator("include_keywords", "exclude_keywords", mode="before")
+    @classmethod
+    def remove_empty_keywords(cls, value: object) -> object:
+        """去掉空白关键词，避免空字符串匹配全部或排除全部节点。"""
+
+        if not isinstance(value, list):
+            return value
+        return [
+            item.strip() if isinstance(item, str) else item
+            for item in value
+            if not isinstance(item, str) or item.strip()
+        ]
+
 
 class PackageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     subscription_name: str | None = Field(default=None, max_length=128)
     enabled: bool = True
     description: str | None = None
+    expires_at: datetime | None = None
+    owner_user_id: int | None = None
+    token_name: str | None = Field(default=None, max_length=128)
     rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
 
 
@@ -34,6 +50,9 @@ class PackageUpdate(BaseModel):
     subscription_name: str | None = Field(default=None, max_length=128)
     enabled: bool | None = None
     description: str | None = None
+    expires_at: datetime | None = None
+    owner_user_id: int | None = None
+    token_name: str | None = Field(default=None, max_length=128)
     rules: PackageRulesPayload | None = None
 
 
@@ -45,8 +64,17 @@ class PackageSummary(BaseModel):
     subscription_name: str | None = None
     enabled: bool
     description: str | None
+    expires_at: datetime | None = None
     token_prefix: str
+    token_name: str | None = None
+    token_created_at: datetime | None = None
+    token_last_access_at: datetime | None = None
+    token_last_access_ip: str | None = None
+    token_access_count: int = 0
+    token_revoked_at: datetime | None = None
     subscription_url: str | None = None
+    owner_user_id: int | None = None
+    owner_username: str | None = None
     created_at: datetime
     updated_at: datetime
     rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
@@ -67,6 +95,19 @@ class PackageTokenResponse(BaseModel):
     package_id: int
     token: str
     subscription_url: str
+
+
+class PackageSubscriptionUrlResponse(BaseModel):
+    """按需获取订阅地址；响应只在受保护接口中返回。"""
+
+    package_id: int
+    subscription_url: str
+
+
+class PackageTokenUpdate(BaseModel):
+    """修改当前订阅 Token 的后台显示名称。"""
+
+    token_name: str = Field(min_length=1, max_length=128)
 
 
 class PreviewNode(BaseModel):

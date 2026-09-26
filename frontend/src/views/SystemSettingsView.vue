@@ -1,5 +1,12 @@
 <template>
   <div class="page">
+    <div class="page-header">
+      <div>
+        <h2 class="page-title">系统设置</h2>
+        <p class="page-subtitle">调整自动同步、缓存与节点去重策略。</p>
+      </div>
+      <div class="page-header-mark"><el-icon><Setting /></el-icon><span>CONTROL</span></div>
+    </div>
     <div class="surface-card settings-card">
     <el-form label-width="200px">
       <el-form-item label="自动同步间隔（分钟）">

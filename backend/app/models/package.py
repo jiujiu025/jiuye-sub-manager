@@ -18,9 +18,21 @@ class Package(Base):
     subscription_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    owner_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    token_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_last_access_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_last_access_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    token_access_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    token_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
@@ -31,6 +43,7 @@ class Package(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    owner: Mapped["User | None"] = relationship()
 
 
 class PackageRule(Base):

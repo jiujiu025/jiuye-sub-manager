@@ -1,5 +1,12 @@
 <template>
   <div class="page">
+    <div class="page-header">
+      <div>
+        <h2 class="page-title">来源管理</h2>
+        <p class="page-subtitle">管理上游订阅地址，观察同步状态与节点变化。</p>
+      </div>
+      <div class="page-header-mark"><el-icon><Connection /></el-icon><span>UPSTREAMS</span></div>
+    </div>
     <div class="filter-bar">
       <el-input
         v-model="filters.keyword"
@@ -82,6 +89,7 @@
       v-model="dialogVisible"
       :title="editing ? '编辑订阅' : '添加订阅'"
       width="560px"
+      append-to-body
     >
       <p class="dialog-subtitle">
         添加一个上游订阅地址，系统会自动获取并解析节点。
@@ -104,8 +112,12 @@
             <el-option label="自动检测" value="auto" />
             <el-option label="Clash YAML" value="clash" />
             <el-option label="Base64" value="base64" />
+            <el-option label="Sing-box JSON" value="singbox" />
+            <el-option label="V2Ray JSON" value="v2ray-json" />
             <el-option label="VLESS" value="vless" />
+            <el-option label="VMess" value="vmess" />
             <el-option label="Shadowsocks" value="ss" />
+            <el-option label="Trojan" value="trojan" />
           </el-select>
         </el-form-item>
         <div class="form-row">

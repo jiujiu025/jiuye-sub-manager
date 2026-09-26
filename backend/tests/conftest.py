@@ -25,6 +25,7 @@ os.environ["SYNC_ENABLED"] = "false"
 from app.main import app  # noqa: E402
 from app.db import engine  # noqa: E402
 from app.models.base import Base  # noqa: E402
+from app.core.rate_limit import rate_limiter  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -35,3 +36,22 @@ def client() -> TestClient:
     Base.metadata.create_all(bind=engine)
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def mock_upstream_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """为 FakeClient 测试提供固定公网解析，避免依赖测试机外网 DNS。"""
+
+    monkeypatch.setattr(
+        "app.services.sync_service.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))],
+    )
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits() -> None:
+    """隔离测试之间的进程内限流状态。"""
+
+    rate_limiter.clear_all()
+    yield
+    rate_limiter.clear_all()

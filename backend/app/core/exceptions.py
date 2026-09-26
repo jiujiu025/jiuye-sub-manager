@@ -21,6 +21,19 @@ class BusinessError(Exception):
         self.status_code = status_code
 
 
+def _safe_validation_errors(exc: RequestValidationError) -> list[dict[str, object]]:
+    """只返回定位和安全文案，避免回显密码、Token 或完整请求体。"""
+
+    return [
+        {
+            "loc": list(error.get("loc", ())),
+            "type": error.get("type", "validation_error"),
+            "msg": error.get("msg", "请求参数无效"),
+        }
+        for error in exc.errors()
+    ]
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """注册全局异常处理器，避免向客户端暴露 traceback。"""
 
@@ -30,13 +43,20 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def handle_http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content={"detail": "请求参数校验失败", "errors": exc.errors()},
+            content={
+                "detail": "请求参数校验失败",
+                "errors": _safe_validation_errors(exc),
+            },
         )
 
     @app.exception_handler(Exception)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.parsers.base import BaseParser, ParsedNode
+from app.parsers.base import BaseParser, ParseError, ParsedNode
 from app.parsers.detector import decode_base64
 from app.parsers.uri_parser import parse_uri_lines
 
@@ -13,5 +13,5 @@ class Base64Parser(BaseParser):
     def parse(self, content: str) -> list[ParsedNode]:
         decoded = decode_base64(content)
         if decoded is None:
-            return []
+            raise ParseError("Base64 内容解码失败")
         return parse_uri_lines(decoded)

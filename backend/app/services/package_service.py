@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -16,11 +18,13 @@ from app.core.security import (
     hash_subscription_token,
     token_prefix,
 )
+from app.models.base import utcnow
 from app.models.package import Package, PackageRule
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
 from app.repositories.package_repo import PackageRepository
+from app.repositories.user_repo import UserRepository
 from app.schemas.package import (
     PackageCreate,
     PackageDetail,
@@ -69,18 +73,29 @@ def normalize_subscription_name(value: str | None) -> str | None:
     return stripped or None
 
 
+def normalize_token_name(value: str | None) -> str | None:
+    """归一化 Token 后台显示名称。"""
+
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 class PackageService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.repo = PackageRepository(db)
         self.node_repo = NodeRepository(db)
         self.log_repo = LogRepository(db)
+        self.user_repo = UserRepository(db)
 
     def create(self, payload: PackageCreate, admin: User) -> tuple[Package, str]:
         """创建套餐并生成一次性明文 Token。"""
 
         if self.repo.get_by_name(payload.name) is not None:
             raise BusinessError("套餐名称已存在")
+        self._validate_owner(payload.owner_user_id)
         token = generate_subscription_token()
         package = self.repo.create(
             name=payload.name,
@@ -89,10 +104,14 @@ class PackageService:
             ),
             enabled=payload.enabled,
             description=payload.description,
+            expires_at=normalize_expiration(payload.expires_at),
             token_hash=hash_subscription_token(token),
             token_prefix=token_prefix(token),
             token_encrypted=encrypt_secret(token),
+            owner_user_id=payload.owner_user_id,
+            token_name=normalize_token_name(payload.token_name) or payload.name,
         )
+        package.token_created_at = utcnow()
         rule = self._build_rule(package, payload.rules)
         self.db.add(rule)
         self.log_repo.create_admin_log(
@@ -112,13 +131,23 @@ class PackageService:
         """修改套餐基本信息与规则。"""
 
         data = payload.model_dump(exclude_unset=True)
+        if "name" in data and data["name"] is None:
+            raise BusinessError("套餐名称不能为 null")
         rules_payload = data.pop("rules", None)
         if "name" in data and data["name"] != package.name:
             if self.repo.get_by_name(data["name"]) is not None:
                 raise BusinessError("套餐名称已存在")
+        if "owner_user_id" in data:
+            self._validate_owner(data["owner_user_id"])
         for key, value in data.items():
             if key == "subscription_name":
                 setattr(package, key, normalize_subscription_name(value))
+                continue
+            if key == "expires_at":
+                setattr(package, key, normalize_expiration(value))
+                continue
+            if key == "token_name":
+                setattr(package, key, normalize_token_name(value))
                 continue
             setattr(package, key, value)
         if rules_payload is not None:
@@ -152,6 +181,12 @@ class PackageService:
         package.token_hash = hash_subscription_token(token)
         package.token_prefix = token_prefix(token)
         package.token_encrypted = encrypt_secret(token)
+        package.token_name = package.token_name or package.name
+        package.token_created_at = utcnow()
+        package.token_last_access_at = None
+        package.token_last_access_ip = None
+        package.token_access_count = 0
+        package.token_revoked_at = None
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
             action="regenerate_token",
@@ -161,6 +196,39 @@ class PackageService:
         self.db.commit()
         cache_service.invalidate_all()
         return token
+
+    def revoke_token(self, package: Package, admin: User) -> None:
+        """吊销当前 Token，不生成新 Token；后续可通过 rotation 恢复访问。"""
+
+        package.token_hash = hash_subscription_token(secrets.token_urlsafe(32))
+        package.token_prefix = "revoked"
+        package.token_encrypted = None
+        package.token_revoked_at = utcnow()
+        self.log_repo.create_admin_log(
+            admin_user_id=admin.id,
+            action="revoke_token",
+            target_type="package",
+            target_value=package.name,
+        )
+        self.db.commit()
+        cache_service.invalidate_all()
+
+    def rename_token(self, package: Package, token_name: str, admin: User) -> Package:
+        """修改 Token 的后台显示名称，不改变 Token 本身。"""
+
+        normalized = normalize_token_name(token_name)
+        if not normalized:
+            raise BusinessError("Token 名称不能为空")
+        package.token_name = normalized
+        self.log_repo.create_admin_log(
+            admin_user_id=admin.id,
+            action="rename_token",
+            target_type="package",
+            target_value=package.name,
+        )
+        self.db.commit()
+        self.db.refresh(package)
+        return package
 
     def toggle(self, package: Package, admin: User) -> Package:
         """启用/禁用套餐。"""
@@ -227,7 +295,16 @@ class PackageService:
             enabled=package.enabled,
             description=package.description,
             token_prefix=package.token_prefix,
-            subscription_url=subscription_url_for_package(package),
+            token_name=package.token_name or package.name,
+            token_created_at=package.token_created_at or package.created_at,
+            token_last_access_at=package.token_last_access_at,
+            token_last_access_ip=package.token_last_access_ip,
+            token_access_count=package.token_access_count,
+            token_revoked_at=package.token_revoked_at,
+            subscription_url=None,
+            owner_user_id=package.owner_user_id,
+            owner_username=package.owner.username if package.owner else None,
+            expires_at=expiration_for_response(package.expires_at),
             created_at=package.created_at,
             updated_at=package.updated_at,
             rules=PackageRulesPayload(
@@ -243,6 +320,23 @@ class PackageService:
         )
 
     @staticmethod
+    def subscription_url(package: Package) -> str | None:
+        """按需解密当前 Token；列表和详情不自动暴露该值。"""
+
+        return subscription_url_for_package(package)
+
+    def _validate_owner(self, owner_user_id: int | None) -> None:
+        """确保套餐只能归属给存在且可登录的普通用户。"""
+
+        if owner_user_id is None:
+            return
+        owner = self.user_repo.get_by_id(owner_user_id)
+        if owner is None or owner.role != "user":
+            raise BusinessError("归属用户不存在或不是普通用户")
+        if not owner.is_active:
+            raise BusinessError("不能把套餐分配给已禁用用户")
+
+    @staticmethod
     def _build_rule(package: Package, payload: PackageRulesPayload) -> PackageRule:
         values = payload.model_dump()
         return PackageRule(package=package, **values)
@@ -256,3 +350,23 @@ class PackageService:
             return
         for key, value in values.items():
             setattr(package.rules, key, value or None)
+
+
+def normalize_expiration(value: datetime | None) -> datetime | None:
+    """把套餐到期时间统一保存为 UTC，避免服务器时区导致提前或延后失效。"""
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def expiration_for_response(value: datetime | None) -> datetime | None:
+    """确保 API 输出的到期时间带 UTC 标记，兼容 SQLite 丢失时区信息。"""
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

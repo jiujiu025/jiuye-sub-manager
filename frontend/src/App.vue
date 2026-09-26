@@ -35,7 +35,7 @@
           </el-avatar>
           <div class="user-meta">
             <div class="user-name">{{ authStore.username }}</div>
-            <div class="user-role">管理员</div>
+            <div class="user-role">{{ isAdmin ? '管理员' : '用户' }}</div>
           </div>
         </div>
         <el-button text class="logout-btn" @click="authStore.logout()">
@@ -50,6 +50,7 @@
           v-if="isMobile"
           text
           class="menu-btn"
+          aria-label="打开导航菜单"
           @click="drawerOpen = true"
         >
           <el-icon :size="18"><Menu /></el-icon>
@@ -59,6 +60,10 @@
           <p class="page-subtitle">{{ pageSubtitle }}</p>
         </div>
         <div class="topbar-actions">
+          <div class="system-status">
+            <span class="status-pulse" />
+            系统在线
+          </div>
           <el-button @click="reloadPage">
             <el-icon><Refresh /></el-icon>
             刷新
@@ -106,7 +111,7 @@
           </el-avatar>
           <div class="user-meta">
             <div class="user-name">{{ authStore.username }}</div>
-            <div class="user-role">管理员</div>
+            <div class="user-role">{{ isAdmin ? '管理员' : '用户' }}</div>
           </div>
         </div>
         <el-button text class="logout-btn" @click="authStore.logout()">
@@ -126,8 +131,9 @@ const route = useRoute()
 const authStore = useAuthStore()
 const drawerOpen = ref(false)
 const isMobile = ref(false)
+const isAdmin = computed(() => authStore.role !== 'user')
 
-const navGroups = [
+const adminNavGroups = [
   {
     title: '工作台',
     items: [{ path: '/', label: '概览', icon: 'Odometer' }]
@@ -149,6 +155,17 @@ const navGroups = [
     ]
   }
 ]
+
+const userNavGroups = [
+  {
+    title: '账户',
+    items: [{ path: '/my-subscriptions', label: '我的订阅', icon: 'Tickets' }]
+  }
+]
+
+const navGroups = computed(() => (
+  isAdmin.value ? adminNavGroups : userNavGroups
+))
 
 const pageTitle = computed(() => route.meta.title || '控制台')
 const pageSubtitle = computed(() => route.meta.subtitle || '')
@@ -192,8 +209,8 @@ onBeforeUnmount(() => {
   width: var(--app-sidebar-width);
   display: flex;
   flex-direction: column;
-  background: var(--app-card);
-  border-right: 1px solid var(--app-border);
+  background: var(--app-ink);
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
   flex-shrink: 0;
 }
 
@@ -201,7 +218,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 20px 16px;
+  padding: 22px 20px 20px;
 }
 
 .brand-mark {
@@ -210,21 +227,22 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: var(--app-primary);
-  border-radius: 10px;
+  color: var(--app-ink);
+  background: var(--app-cyan);
+  border-radius: 11px;
+  box-shadow: 0 8px 18px rgba(24, 184, 178, 0.24);
 }
 
 .brand-name {
   font-size: 16px;
   font-weight: 700;
   line-height: 1.2;
-  color: var(--app-text);
+  color: #fff;
 }
 
 .brand-sub {
   font-size: 11px;
-  color: var(--app-text-muted);
+  color: #8794b0;
 }
 
 .nav {
@@ -238,7 +256,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0;
-  color: var(--app-text-muted);
+  color: #697795;
   text-transform: uppercase;
 }
 
@@ -250,20 +268,20 @@ onBeforeUnmount(() => {
   padding: 11px 12px;
   margin-bottom: 2px;
   border-radius: var(--app-radius-sm);
-  color: var(--app-text-secondary);
+  color: #9aa6be;
   font-size: 14px;
   text-decoration: none;
   transition: background 150ms ease, color 150ms ease;
 }
 
 .nav-item:hover {
-  background: #f2f4f7;
-  color: var(--app-text);
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
 }
 
 .nav-item.active {
-  background: #eef3fe;
-  color: var(--app-primary);
+  background: rgba(24, 184, 178, 0.14);
+  color: #72e4dc;
   font-weight: 600;
 }
 
@@ -275,11 +293,11 @@ onBeforeUnmount(() => {
   height: 56%;
   width: 3px;
   border-radius: 2px;
-  background: var(--app-primary);
+  background: var(--app-cyan);
 }
 
 .sidebar-footer {
-  border-top: 1px solid var(--app-border);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding: 14px 16px;
 }
 
@@ -290,7 +308,7 @@ onBeforeUnmount(() => {
 }
 
 .user-avatar {
-  background: var(--app-primary);
+  background: var(--app-lilac);
   color: #fff;
   font-weight: 600;
 }
@@ -298,19 +316,24 @@ onBeforeUnmount(() => {
 .user-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--app-text);
+  color: #fff;
 }
 
 .user-role {
   font-size: 11px;
-  color: var(--app-text-muted);
+  color: #8794b0;
 }
 
 .logout-btn {
   width: 100%;
   justify-content: flex-start;
   margin-top: 8px;
-  color: var(--app-text-muted);
+  color: #9aa6be;
+}
+
+.logout-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .main-area {
@@ -326,7 +349,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   padding: 0 24px;
-  background: var(--app-card);
+  background: rgba(255, 255, 255, 0.9);
   border-bottom: 1px solid var(--app-border);
 }
 
@@ -346,7 +369,28 @@ onBeforeUnmount(() => {
 }
 
 .topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   flex-shrink: 0;
+}
+
+.system-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--app-cyan);
+  box-shadow: 0 0 0 0 rgba(24, 184, 178, 0.45);
+  animation: status-pulse 2.2s ease-out infinite;
 }
 
 .content {
@@ -365,6 +409,16 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   padding: 0;
+}
+
+.mobile-drawer :deep(.el-drawer) {
+  background: var(--app-ink);
+}
+
+@keyframes status-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(24, 184, 178, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(24, 184, 178, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(24, 184, 178, 0); }
 }
 
 .mobile-brand {

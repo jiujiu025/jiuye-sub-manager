@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 # 顺序敏感：更具体的关键词必须排在前面，避免被短关键词误匹配
 COUNTRY_RULES: list[tuple[tuple[str, ...], str]] = [
     (("hong kong", "香港", "hk", "xianggang"), "香港"),
@@ -57,6 +59,13 @@ def detect_country(name: str) -> str | None:
     lowered = name.lower()
     for keywords, country in COUNTRY_RULES:
         for keyword in keywords:
-            if keyword in lowered:
+            if keyword.isascii() and keyword.isalpha():
+                matched = re.search(
+                    rf"(?<![a-z]){re.escape(keyword)}(?![a-z])",
+                    lowered,
+                )
+            else:
+                matched = keyword in lowered
+            if matched:
                 return country
     return None

@@ -15,14 +15,41 @@ def _from_outbound(item: dict) -> ParsedNode | None:
     tag = item.get("tag") or server or ""
     if not server or not port:
         return None
-    tls_config = item.get("tls") or {}
+    raw_tls = item.get("tls")
+    if raw_tls is None:
+        tls_config = {}
+    elif isinstance(raw_tls, bool):
+        # 兼容旧版 sing-box 使用布尔值表示 TLS 开关的配置。
+        tls_config = {"enabled": raw_tls}
+    elif isinstance(raw_tls, dict):
+        tls_config = raw_tls
+    else:
+        raise ParseError("Sing-box TLS 配置格式无效")
     tls_enabled = bool(tls_config.get("enabled"))
     reality = tls_config.get("reality") or {}
+    if not isinstance(reality, dict):
+        raise ParseError("Sing-box Reality 配置格式无效")
     utls = tls_config.get("utls") or {}
+    if not isinstance(utls, dict):
+        raise ParseError("Sing-box uTLS 配置格式无效")
+    transport = item.get("transport")
+    if transport is None:
+        transport = {}
+    if not isinstance(transport, dict):
+        raise ParseError("Sing-box transport 配置格式无效")
+    transport_headers = transport.get("headers") or {}
+    if not isinstance(transport_headers, dict):
+        raise ParseError("Sing-box transport.headers 配置格式无效")
+    try:
+        parsed_port = int(port)
+    except (TypeError, ValueError) as exc:
+        raise ParseError("Sing-box 节点端口无效") from exc
+    if not 0 < parsed_port < 65536:
+        raise ParseError("Sing-box 节点端口超出范围")
     common = {
         "original_name": str(tag),
         "server": str(server),
-        "port": int(port),
+        "port": parsed_port,
         "tls": tls_enabled,
         "sni": tls_config.get("server_name"),
         "fingerprint": utls.get("fingerprint") or tls_config.get("fingerprint"),
@@ -36,9 +63,9 @@ def _from_outbound(item: dict) -> ParsedNode | None:
             **common,
             type="vless",
             uuid=item.get("uuid"),
-            network=item.get("transport", {}).get("type") if isinstance(item.get("transport"), dict) else item.get("network"),
-            path=item.get("transport", {}).get("path") if isinstance(item.get("transport"), dict) else None,
-            host=item.get("transport", {}).get("headers", {}).get("Host") if isinstance(item.get("transport"), dict) else None,
+            network=transport.get("type") or item.get("network"),
+            path=transport.get("path"),
+            host=transport_headers.get("Host"),
         )
     if outbound_type == "vmess":
         return ParsedNode(
@@ -46,9 +73,9 @@ def _from_outbound(item: dict) -> ParsedNode | None:
             type="vmess",
             uuid=item.get("uuid"),
             cipher=item.get("security") or "auto",
-            network=item.get("transport", {}).get("type") if isinstance(item.get("transport"), dict) else None,
-            path=item.get("transport", {}).get("path") if isinstance(item.get("transport"), dict) else None,
-            host=item.get("transport", {}).get("headers", {}).get("Host") if isinstance(item.get("transport"), dict) else None,
+            network=transport.get("type"),
+            path=transport.get("path"),
+            host=transport_headers.get("Host"),
         )
     if outbound_type == "shadowsocks":
         return ParsedNode(
@@ -62,7 +89,7 @@ def _from_outbound(item: dict) -> ParsedNode | None:
             **common,
             type="trojan",
             password=item.get("password"),
-            network=item.get("transport", {}).get("type") if isinstance(item.get("transport"), dict) else None,
+            network=transport.get("type"),
         )
     if outbound_type in ("socks", "http"):
         return ParsedNode(

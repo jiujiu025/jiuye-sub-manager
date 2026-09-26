@@ -7,7 +7,7 @@ import yaml
 from app.parsers.base import BaseParser, ParseError, ParsedNode
 from app.utils.country import detect_country
 
-_SUPPORTED_TYPES = {"vless", "ss", "shadowsocks", "vmess", "trojan"}
+_SUPPORTED_TYPES = {"vless", "ss", "shadowsocks", "vmess", "trojan", "anytls"}
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
@@ -74,7 +74,10 @@ def _extract_node(item: dict) -> ParsedNode | None:
     security_text = str(security or "").strip().lower()
     if node_type == "vless":
         security = security_text or None
-    tls_default = is_reality or node_type == "trojan"
+    if node_type == "anytls" and not security_text:
+        security = "tls"
+        security_text = "tls"
+    tls_default = is_reality or node_type in {"trojan", "anytls"}
     cipher = item.get("cipher")
     if node_type == "vmess":
         cipher = cipher or item.get("security")
@@ -108,7 +111,7 @@ class ClashParser(BaseParser):
     def parse(self, content: str) -> list[ParsedNode]:
         try:
             data = yaml.safe_load(content)
-        except yaml.YAMLError as exc:
+        except (yaml.YAMLError, RecursionError) as exc:
             raise ParseError(f"Clash YAML 解析失败: {exc}") from exc
         if not isinstance(data, dict) or not isinstance(data.get("proxies"), list):
             raise ParseError("Clash 配置缺少 proxies 列表")

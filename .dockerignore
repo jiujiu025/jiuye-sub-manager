@@ -1,0 +1,14 @@
+.env
+.git
+.gitignore
+*.db
+*.sqlite
+*.sqlite3
+backend/data/
+data/
+logs/
+node_modules/
+frontend/dist/
+frontend/.vite/
+__pycache__/
+*.pyc

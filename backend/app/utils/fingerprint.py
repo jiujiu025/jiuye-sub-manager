@@ -74,7 +74,7 @@ def build_source_node_key(
     if normalized_uuid and normalized_type in {"vless", "vmess", "tuic"}:
         identity = f"{normalized_type}|uuid|{normalized_uuid}"
     elif (
-        normalized_type in {"shadowsocks", "trojan"}
+        normalized_type in {"shadowsocks", "trojan", "anytls"}
         and password
         and original_name
     ):

@@ -103,7 +103,11 @@ def test_update_subscription_name_keeps_token_and_url(
 
     list_response = client.get("/api/packages", headers=auth_headers).json()
     item = next(item for item in list_response if item["id"] == package_id)
-    assert item["subscription_url"] == url_before
+    assert item["subscription_url"] is None
+    protected_url = client.get(
+        f"/api/packages/{package_id}/subscription-url", headers=auth_headers
+    )
+    assert protected_url.json()["subscription_url"] == url_before
 
 
 def test_update_package_name_keeps_url(client: TestClient, auth_headers: dict) -> None:
@@ -120,7 +124,11 @@ def test_update_package_name_keeps_url(client: TestClient, auth_headers: dict) -
 
     list_response = client.get("/api/packages", headers=auth_headers).json()
     item = next(item for item in list_response if item["id"] == package_id)
-    assert item["subscription_url"] == url_before
+    assert item["subscription_url"] is None
+    protected_url = client.get(
+        f"/api/packages/{package_id}/subscription-url", headers=auth_headers
+    )
+    assert protected_url.json()["subscription_url"] == url_before
 
 
 def test_clash_output_uses_subscription_name_without_touching_node_names(
@@ -374,7 +382,11 @@ def test_update_name_then_subscription_output_refreshes(
 
     items = client.get("/api/packages", headers=auth_headers).json()
     item = next(x for x in items if x["id"] == package_id)
-    assert item["subscription_url"] == url_before
+    assert item["subscription_url"] is None
+    protected_url = client.get(
+        f"/api/packages/{package_id}/subscription-url", headers=auth_headers
+    )
+    assert protected_url.json()["subscription_url"] == url_before
     data = yaml.safe_load(client.get(f"/sub/{token}").text)
     assert data["sub-name"] == "新名称"
 

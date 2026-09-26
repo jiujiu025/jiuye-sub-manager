@@ -27,3 +27,8 @@ Thumbs.db
 # 日志
 logs/
 *.log
+
+# 生产证书
+deploy/certs/
+*.pem
+*.key

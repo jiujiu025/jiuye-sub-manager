@@ -35,6 +35,35 @@ class ParsedNode:
     metadata: dict = field(default_factory=dict)
 
 
+def validate_parsed_node(node: ParsedNode) -> None:
+    """校验解析结果的协议必填字段，避免无效节点进入节点池。"""
+
+    if (
+        not isinstance(node.server, str)
+        or not node.server.strip()
+        or isinstance(node.port, bool)
+        or not isinstance(node.port, int)
+        or not 0 < node.port < 65536
+    ):
+        raise ParseError("节点服务器或端口无效")
+
+    if node.type in {"vless", "vmess", "tuic"} and (
+        not isinstance(node.uuid, str) or not node.uuid.strip()
+    ):
+        raise ParseError(f"{node.type.upper()} 节点缺少 UUID")
+    if node.type == "shadowsocks" and (
+        not isinstance(node.cipher, str)
+        or not node.cipher.strip()
+        or not isinstance(node.password, str)
+        or not node.password.strip()
+    ):
+        raise ParseError("Shadowsocks 节点缺少加密方式或密码")
+    if node.type in {"trojan", "hysteria", "hysteria2", "anytls"} and (
+        not isinstance(node.password, str) or not node.password.strip()
+    ):
+        raise ParseError(f"{node.type.upper()} 节点缺少密码")
+
+
 class BaseParser(ABC):
     """所有订阅解析器必须实现 parse 方法。"""
 

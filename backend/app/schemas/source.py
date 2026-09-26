@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field, computed_field
 from app.core.security import mask_secret
 from app.schemas.common import ORMModel
 
-SourceFormat = Literal["auto", "clash", "base64", "vless", "ss"]
+SourceFormat = Literal[
+    "auto", "clash", "singbox", "v2ray-json", "v2ray", "base64", "vless", "vmess", "ss", "trojan"
+]
 
 
 class SourceCreate(BaseModel):
@@ -43,6 +45,10 @@ class SourceSummary(ORMModel):
     last_sync_status: str
     last_sync_at: datetime | None
     last_error: str | None
+    last_success_at: datetime | None
+    last_success_node_count: int | None
+    last_sync_duration_ms: int | None
+    consecutive_failures: int
     created_at: datetime
     updated_at: datetime
 
@@ -66,6 +72,10 @@ class SourceDetail(ORMModel):
     last_sync_status: str
     last_sync_at: datetime | None
     last_error: str | None
+    last_success_at: datetime | None
+    last_success_node_count: int | None
+    last_sync_duration_ms: int | None
+    consecutive_failures: int
     created_at: datetime
     updated_at: datetime
 

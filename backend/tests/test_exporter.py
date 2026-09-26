@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import yaml
 
 from app.exporters.clash import ClashExporter
@@ -72,6 +74,30 @@ def test_export_vless_reality() -> None:
     assert "tls: true" in yaml_text
 
 
+def test_singbox_vless_reality_preserves_flow() -> None:
+    """Sing-box VLESS Reality 必须保留 xtls flow。"""
+
+    node = _make_node(
+        name="Reality-flow",
+        node_type="vless",
+        server="reality-flow.example.com",
+        port=443,
+        uuid="00000000-0000-0000-0000-000000000100",
+        security="reality",
+        tls=True,
+        sni="www.example.com",
+        public_key="public-key",
+        short_id="short-id",
+        metadata_json={"flow": "xtls-rprx-vision"},
+    )
+
+    from app.exporters.singbox import SingboxExporter
+
+    data = json.loads(SingboxExporter().export([(node, node.name)]))
+    outbound = next(item for item in data["outbounds"] if item["tag"] == node.name)
+    assert outbound["flow"] == "xtls-rprx-vision"
+
+
 def test_export_plain_vless_tls_unchanged() -> None:
     """普通 VLESS（无 Reality 字段）的 tls 状态不应被强制改为 true。"""
 
@@ -119,6 +145,35 @@ def test_export_shadowsocks() -> None:
     assert "type: ss" in yaml_text
     assert "password-secret" in yaml_text
     assert "aes-256-gcm" in yaml_text
+
+
+def test_export_anytls_formats() -> None:
+    """AnyTLS 应能导出 Clash、sing-box 和标准 URI。"""
+
+    node = _make_node(
+        name="AnyTLS-01",
+        node_type="anytls",
+        server="anytls.example.com",
+        port=443,
+        password="anytls-password",
+        sni="anytls.example.com",
+        fingerprint="chrome",
+        security="tls",
+        tls=True,
+    )
+    clash = yaml.safe_load(ClashExporter().export([(node, node.name)]))
+    proxy = clash["proxies"][0]
+    assert proxy["type"] == "anytls"
+    assert proxy["password"] == "anytls-password"
+
+    from app.exporters.singbox import SingboxExporter
+    from app.exporters.uri import UriExporter
+
+    singbox = json.loads(SingboxExporter().export([(node, node.name)]))
+    outbound = next(item for item in singbox["outbounds"] if item["tag"] == node.name)
+    assert outbound["type"] == "anytls"
+    assert outbound["tls"]["enabled"] is True
+    assert UriExporter().export([(node, node.name)]).startswith("anytls://")
 
 
 def test_export_never_exposes_upstream_url() -> None:
@@ -183,6 +238,31 @@ def test_export_yaml_is_valid_mihomo_config() -> None:
             assert proxy["cipher"]
             assert proxy["password"]
             assert proxy["udp"] is True
+
+
+def test_export_makes_duplicate_names_unique() -> None:
+    """Clash group 引用的代理名称必须唯一。"""
+
+    nodes = [
+        _make_node(
+            name="same",
+            node_type="vless",
+            server="same-a.example.com",
+            port=443,
+            uuid="uuid-same-a",
+        ),
+        _make_node(
+            name="same",
+            node_type="vless",
+            server="same-b.example.com",
+            port=443,
+            uuid="uuid-same-b",
+        ),
+    ]
+    data = yaml.safe_load(ClashExporter().export([(nodes[0], "same"), (nodes[1], "same")]))
+    proxy_names = [proxy["name"] for proxy in data["proxies"]]
+    assert proxy_names == ["same", "same-2"]
+    assert data["proxy-groups"][0]["proxies"] == proxy_names
 
 
 def test_export_vmess_trojan_socks_http() -> None:

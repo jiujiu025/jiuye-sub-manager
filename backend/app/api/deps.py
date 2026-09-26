@@ -15,11 +15,11 @@ from app.repositories.user_repo import UserRepository
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_current_admin(
+def _get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    """解析 Bearer Token 并返回当前管理员。"""
+    """解析 Bearer Token 并返回当前活跃用户。"""
 
     if credentials is None:
         raise HTTPException(
@@ -39,7 +39,28 @@ def get_current_admin(
     if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="管理员不存在或已禁用",
+            detail="用户不存在或已禁用",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    return user
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """返回当前活跃用户或管理员。"""
+
+    return _get_current_user(credentials, db)
+
+
+def get_current_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """返回当前管理员。"""
+
+    user = _get_current_user(credentials, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
     return user

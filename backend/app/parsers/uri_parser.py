@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.parsers.base import ParseError, ParsedNode
+from app.parsers.anytls_parser import parse_anytls_uri
 from app.parsers.http_parser import parse_http_uri
 from app.parsers.hysteria2_parser import parse_hysteria2_uri
 from app.parsers.hysteria_parser import parse_hysteria_uri
@@ -17,6 +18,8 @@ from app.parsers.vmess_parser import parse_vmess_uri
 def parse_uri_line(line: str, forced: str | None = None) -> ParsedNode:
     """解析单行节点链接；解析失败抛出 ParseError。"""
 
+    if "\\://" in line:
+        line = line.replace("\\://", "://", 1)
     if forced == "vless":
         return parse_vless_uri(line)
     if forced == "vmess":
@@ -35,6 +38,8 @@ def parse_uri_line(line: str, forced: str | None = None) -> ParsedNode:
         return parse_hysteria2_uri(line)
     if forced == "tuic":
         return parse_tuic_uri(line)
+    if forced == "anytls":
+        return parse_anytls_uri(line)
     if line.startswith("vless://"):
         return parse_vless_uri(line)
     if line.startswith("vmess://"):
@@ -53,6 +58,8 @@ def parse_uri_line(line: str, forced: str | None = None) -> ParsedNode:
         return parse_hysteria2_uri(line)
     if line.startswith("tuic://"):
         return parse_tuic_uri(line)
+    if line.startswith("anytls://"):
+        return parse_anytls_uri(line)
     raise ParseError("无法识别的节点链接")
 
 

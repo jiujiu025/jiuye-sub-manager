@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import json
 import re
 
-_BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/=\s]+$")
+_BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/_=\s-]+$")
 _URI_SCHEMES = (
     "vless://",
     "vmess://",
@@ -19,6 +21,7 @@ _URI_SCHEMES = (
     "hysteria2://",
     "hy2://",
     "tuic://",
+    "anytls://",
 )
 
 
@@ -32,16 +35,22 @@ def decode_base64(value: str) -> str | None:
     compact = "".join(value.split())
     try:
         padding = "=" * (-len(compact) % 4)
-        raw = base64.b64decode(compact + padding)
-        return raw.decode("utf-8", errors="ignore")
-    except (ValueError, TypeError):
+        raw = base64.b64decode(
+            compact + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        return raw.decode("utf-8-sig")
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
         return None
 
 
 def detect_format(content: str) -> str:
     """根据内容特征识别订阅格式。"""
 
-    stripped = content.strip()
+    stripped = content.strip().lstrip("\ufeff")
+    if "\\://" in stripped:
+        stripped = stripped.replace("\\://", "://", 1)
     if not stripped:
         return "unknown"
     first_line = stripped.splitlines()[0].strip()
@@ -49,8 +58,29 @@ def detect_format(content: str) -> str:
         return "uri"
     if "proxies:" in stripped or "proxy-providers:" in stripped:
         return "clash"
-    if stripped.startswith("{") and "outbounds" in stripped:
-        return "singbox"
+    if stripped.startswith("{"):
+        try:
+            json_data = json.loads(stripped)
+        except json.JSONDecodeError:
+            json_data = None
+        if isinstance(json_data, dict):
+            outbounds = json_data.get("outbounds")
+            if outbounds is None and json_data.get("protocol"):
+                outbounds = [json_data]
+            if isinstance(outbounds, dict):
+                outbounds = [outbounds]
+            if isinstance(outbounds, list):
+                for outbound in outbounds:
+                    if not isinstance(outbound, dict):
+                        continue
+                    protocol = str(outbound.get("protocol") or "").lower()
+                    settings = outbound.get("settings") or {}
+                    if protocol in {"vmess", "vless", "trojan", "shadowsocks"} or (
+                        isinstance(settings, dict) and settings.get("vnext")
+                    ):
+                        return "v2ray-json"
+            if "outbounds" in json_data or "inbounds" in json_data:
+                return "singbox"
     if _looks_like_base64(stripped):
         decoded = decode_base64(stripped)
         if decoded and any(scheme in decoded for scheme in _URI_SCHEMES):
@@ -66,4 +96,6 @@ def detect_uri_type(content: str) -> str:
             return "vless"
         if line.startswith("ss://"):
             return "ss"
+        if line.startswith("anytls://"):
+            return "anytls"
     return "unknown"

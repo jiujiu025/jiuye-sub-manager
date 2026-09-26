@@ -34,14 +34,17 @@ class NodeRepository:
         if country:
             conditions.append(Node.country == country)
         if keyword:
-            lowered = keyword.lower()
-            conditions.append(
-                or_(
-                    func.lower(Node.name).contains(lowered),
-                    func.lower(Node.original_name).contains(lowered),
-                    func.lower(Node.server).contains(lowered),
+            lowered = keyword.strip().lower()
+            if not lowered:
+                keyword = None
+            else:
+                conditions.append(
+                    or_(
+                        func.lower(Node.name).contains(lowered, autoescape=True),
+                        func.lower(Node.original_name).contains(lowered, autoescape=True),
+                        func.lower(Node.server).contains(lowered, autoescape=True),
+                    )
                 )
-            )
         if enabled is not None:
             conditions.append(Node.enabled == enabled)
 
@@ -104,11 +107,13 @@ class NodeRepository:
             conditions.append(Node.country.in_(countries))
         if types:
             conditions.append(Node.type.in_(types))
+        include_keywords = [keyword.strip() for keyword in (include_keywords or []) if keyword.strip()]
+        exclude_keywords = [keyword.strip() for keyword in (exclude_keywords or []) if keyword.strip()]
         if include_keywords:
             conditions.append(
                 or_(
                     *[
-                        func.lower(Node.name).contains(keyword.lower())
+                        func.lower(Node.name).contains(keyword.lower(), autoescape=True)
                         for keyword in include_keywords
                     ]
                 )
@@ -117,7 +122,7 @@ class NodeRepository:
             conditions.append(
                 ~or_(
                     *[
-                        func.lower(Node.name).contains(keyword.lower())
+                        func.lower(Node.name).contains(keyword.lower(), autoescape=True)
                         for keyword in exclude_keywords
                     ]
                 )

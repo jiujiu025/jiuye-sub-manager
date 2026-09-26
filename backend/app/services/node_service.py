@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
 from app.core.exceptions import BusinessError
 from app.models.node import Node
+from app.models.package import PackageRule
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
@@ -28,6 +30,7 @@ SUPPORTED_NODE_TYPES = {
     "hysteria",
     "hysteria2",
     "tuic",
+    "anytls",
 }
 
 SUPPORTED_SS_CIPHERS = {
@@ -67,8 +70,8 @@ def _validate_self_node(
             raise BusinessError("Shadowsocks 节点缺少加密方式")
         if normalized_cipher not in SUPPORTED_SS_CIPHERS:
             raise BusinessError(f"Shadowsocks 不支持的加密方式：{cipher}")
-    if node_type == "trojan" and (not password or not password.strip()):
-        raise BusinessError("Trojan 节点缺少密码")
+    if node_type in {"trojan", "anytls"} and (not password or not password.strip()):
+        raise BusinessError(f"{node_type.upper()} 节点缺少密码")
     if node_type in ("hysteria", "hysteria2") and (
         not password or not password.strip()
     ):
@@ -181,6 +184,28 @@ class NodeService:
         """更新节点并重新计算指纹；与其他节点冲突时拒绝。"""
 
         data = payload.model_dump(exclude_unset=True)
+        if "enabled" in data and data["enabled"] is None:
+            raise BusinessError("节点字段 enabled 不能为 null")
+        if node.source_id is not None or node.source_type == "upstream":
+            editable_fields = set(data) - {"enabled"}
+            if editable_fields:
+                raise BusinessError("上游节点不支持直接编辑，请复制为自有节点后修改")
+            if not data:
+                raise BusinessError("至少需要提交一个可修改字段")
+            node.enabled = data["enabled"]
+            self.log_repo.create_admin_log(
+                admin_user_id=admin.id,
+                action="update_node_status",
+                target_type="node",
+                target_value=node.name,
+            )
+            self.db.commit()
+            self.db.refresh(node)
+            cache_service.invalidate_all()
+            return node
+        for key in ("name", "server", "port"):
+            if key in data and data[key] is None:
+                raise BusinessError(f"节点字段 {key} 不能为 null")
         final_type = data.get("type", node.type)
         _validate_self_node(
             final_type,
@@ -264,6 +289,16 @@ class NodeService:
     def _remove_owner_node(self, node: Node) -> None:
         """删除节点并同步更新其来源的 node_count。"""
 
+        for rule in self.db.scalars(select(PackageRule)).all():
+            if not isinstance(rule.node_ids, list):
+                continue
+            remaining_ids = [
+                value
+                for value in rule.node_ids
+                if not (str(value).isdigit() and int(value) == node.id)
+            ]
+            if remaining_ids != rule.node_ids:
+                rule.node_ids = remaining_ids
         if node.source_id is not None:
             owner = self.source_repo.get(node.source_id)
             if owner is not None:

@@ -12,6 +12,16 @@ services:
       - sub_manager_logs:/app/logs
     expose:
       - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   nginx:
     build:
@@ -19,11 +29,30 @@ services:
       dockerfile: frontend/Dockerfile
     container_name: sub-manager-nginx
     restart: unless-stopped
+    environment:
+      - APP_ENV=${APP_ENV:-development}
     ports:
       - "80:80"
       - "443:443"
+    volumes:
+      - ./deploy/certs:/etc/nginx/certs:ro
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          normalized_app_env=$$(printf '%s' "$${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]');
+          if [ "$$normalized_app_env" = "production" ] || [ "$$normalized_app_env" = "prod" ]; then
+            wget -q --no-check-certificate --spider https://127.0.0.1/healthz;
+          else
+            wget -q --spider http://127.0.0.1/healthz;
+          fi
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   sub_manager_data:

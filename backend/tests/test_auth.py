@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.security import create_access_token, hash_password
+from app.db import SessionLocal
+from app.models.user import User
+
 LOGIN_URL = "/api/admin/login"
 ME_URL = "/api/admin/me"
 PASSWORD_URL = "/api/admin/password"
@@ -61,6 +65,88 @@ def test_me_with_invalid_token(client: TestClient) -> None:
 
     response = client.get(ME_URL, headers={"Authorization": "Bearer invalid-token"})
     assert response.status_code == 401
+
+
+def test_non_admin_role_cannot_use_admin_apis(client: TestClient) -> None:
+    """JWT 对应的活跃非管理员用户不能访问后台管理接口。"""
+
+    username = "viewer-security-test"
+    db = SessionLocal()
+    try:
+        db.add(
+            User(
+                username=username,
+                password_hash=hash_password("ViewerPass123!"),
+                role="viewer",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    token = create_access_token(username)
+    response = client.get("/api/packages", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "权限不足"
+
+
+def test_user_login_returns_user_role_and_cannot_use_admin_login(client: TestClient) -> None:
+    """普通用户应从通用入口登录，管理员入口不能发放管理员会话。"""
+
+    create_response = client.post(
+        "/api/users",
+        json={"username": "normal-login-user", "password": "UserPass123!"},
+        headers={"Authorization": f"Bearer {_login(client)}"},
+    )
+    assert create_response.status_code == 201
+
+    admin_login = client.post(
+        LOGIN_URL,
+        json={"username": "normal-login-user", "password": "UserPass123!"},
+    )
+    assert admin_login.status_code == 401
+
+    user_login = client.post(
+        "/api/auth/login",
+        json={"username": "normal-login-user", "password": "UserPass123!"},
+    )
+    assert user_login.status_code == 200
+    assert user_login.json()["role"] == "user"
+    me = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {user_login.json()['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["username"] == "normal-login-user"
+
+
+def test_admin_can_update_username_and_password(client: TestClient) -> None:
+    """管理员修改用户名后旧 subject 失效，新用户名可以登录。"""
+
+    old_token = _login(client)
+    response = client.put(
+        "/api/admin/profile",
+        json={
+            "current_password": ORIGINAL_PASSWORD,
+            "username": "renamed-admin",
+        },
+        headers={"Authorization": f"Bearer {old_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["username"] == "renamed-admin"
+
+    assert client.get(
+        ME_URL, headers={"Authorization": f"Bearer {old_token}"}
+    ).status_code == 401
+    new_token = client.post(
+        LOGIN_URL,
+        json={"username": "renamed-admin", "password": ORIGINAL_PASSWORD},
+    ).json()["access_token"]
+    assert client.put(
+        "/api/admin/profile",
+        json={"current_password": ORIGINAL_PASSWORD, "username": ADMIN_USERNAME},
+        headers={"Authorization": f"Bearer {new_token}"},
+    ).status_code == 200
 
 
 def test_change_password_and_revert(client: TestClient) -> None:

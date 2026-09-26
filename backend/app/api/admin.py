@@ -2,23 +2,64 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
+from app.core.config import get_settings
+from app.core.rate_limit import (
+    RATE_LIMIT_MESSAGE,
+    rate_limiter,
+    request_client_ip,
+    stable_rate_key,
+)
 from app.db import get_db
 from app.models.user import User
-from app.schemas.auth import LoginRequest, PasswordChangeRequest, TokenResponse, UserResponse
+from app.schemas.auth import (
+    LoginRequest,
+    PasswordChangeRequest,
+    ProfileUpdateRequest,
+    TokenResponse,
+    UserResponse,
+)
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def login(
+    payload: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TokenResponse:
     """管理员登录，返回 JWT。"""
 
-    return AuthService(db).login(payload.username, payload.password)
+    settings = get_settings()
+    key = stable_rate_key(
+        "login", request_client_ip(request), payload.username.strip().lower()
+    )
+    decision = rate_limiter.check(
+        key, settings.login_rate_limit, settings.login_rate_window_seconds
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=RATE_LIMIT_MESSAGE,
+            headers={"Retry-After": str(decision.retry_after)},
+        )
+    try:
+        result = AuthService(db).login(
+            payload.username, payload.password, required_role="admin"
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            rate_limiter.hit(
+                key, settings.login_rate_limit, settings.login_rate_window_seconds
+            )
+        raise
+    rate_limiter.clear(key)
+    return result
 
 
 @router.get("/me", response_model=UserResponse)
@@ -38,3 +79,14 @@ def change_password(
 
     AuthService(db).change_password(current_admin, payload.old_password, payload.new_password)
     return {"detail": "密码修改成功"}
+
+
+@router.put("/profile", response_model=UserResponse)
+def update_profile(
+    payload: ProfileUpdateRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> User:
+    """修改当前管理员用户名或密码。"""
+
+    return AuthService(db).update_profile(current_admin, payload)

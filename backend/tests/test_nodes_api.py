@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.node import Node
+from app.models.source import Source
 from app.utils.fingerprint import build_node_fingerprint
 
 
@@ -112,6 +113,63 @@ def test_create_self_vless_node(client: TestClient, auth_headers: dict[str, str]
     assert payload["source_name"] == "自有节点"
     assert payload["uuid"] == "00000000-0000-0000-0000-000000000002"
     assert payload["country"] == "香港"
+
+
+def test_anytls_import_and_single_node_export(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """AnyTLS 导入后应能通过节点分享接口导出 URI。"""
+
+    imported = client.post(
+        "/api/nodes/import",
+        json={
+            "content": "anytls://anytls-password@anytls.example.com:443"
+            "?security=tls&sni=anytls.example.com#AnyTLS-01",
+            "source_subtype": "custom_url",
+            "format": "auto",
+        },
+        headers=auth_headers,
+    )
+    assert imported.status_code == 200
+    assert imported.json()["success"] == 1
+
+    db = SessionLocal()
+    try:
+        node = db.scalar(select(Node).where(Node.type == "anytls"))
+        assert node is not None
+        node_id = node.id
+    finally:
+        db.close()
+
+    exported = client.get(f"/api/nodes/{node_id}/export", headers=auth_headers)
+    assert exported.status_code == 200
+    assert exported.json()["type"] == "anytls"
+    assert exported.json()["content"].startswith("anytls://")
+
+
+def test_node_health_returns_unknown_without_active_probe(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """健康接口只提供稳定状态契约，不主动探测节点。"""
+
+    created = client.post(
+        "/api/nodes",
+        json={
+            "name": "健康检查节点",
+            "type": "vless",
+            "server": "health.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-0000-0000-000000000003",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    node_id = created.json()["id"]
+
+    health = client.get(f"/api/nodes/{node_id}/health", headers=auth_headers)
+    assert health.status_code == 200
+    assert health.json()["status"] == "unknown"
+    assert client.get("/api/nodes/999999/health", headers=auth_headers).status_code == 404
 
 
 def test_create_self_node_missing_fields(
@@ -245,6 +303,14 @@ def test_update_self_node_revalidates_protocol_fields(
     assert invalid_vless_format.status_code == 400
     assert "UUID" in invalid_vless_format.json()["detail"]
 
+    invalid_enabled = client.put(
+        f"/api/nodes/{vless.json()['id']}",
+        json={"enabled": None},
+        headers=auth_headers,
+    )
+    assert invalid_enabled.status_code == 400
+    assert "enabled" in invalid_enabled.json()["detail"]
+
     shadowsocks = client.post(
         "/api/nodes",
         json={
@@ -281,6 +347,96 @@ def test_update_self_node_revalidates_protocol_fields(
     )
     assert valid_update.status_code == 200
     assert valid_update.json()["cipher"] == "CHACHA20-IETF-POLY1305"
+
+
+def test_update_self_node_rejects_explicit_null_required_fields(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """节点必填字段显式传 null 时应返回业务校验错误。"""
+
+    created = client.post(
+        "/api/nodes",
+        json={
+            "name": "null-field-node",
+            "type": "vless",
+            "server": "null-field.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-0000-0000-000000000010",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    response = client.put(
+        f"/api/nodes/{created.json()['id']}",
+        json={"name": None},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert "不能为 null" in response.json()["detail"]
+
+
+def test_upstream_node_cannot_be_edited_into_self_node(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """上游节点只能修改启用状态，不能破坏来源归属。"""
+
+    db = SessionLocal()
+    try:
+        source = Source(
+            name="protected-source",
+            url="https://example.com/protected",
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
+        node = Node(
+            source_id=source.id,
+            source_name=source.name,
+            original_name="upstream-node",
+            name="upstream-node",
+            type="vless",
+            server="upstream.example.com",
+            port=443,
+            uuid="00000000-0000-0000-0000-000000000099",
+            source_type="upstream",
+            node_fingerprint=build_node_fingerprint(
+                node_type="vless",
+                server="upstream.example.com",
+                port=443,
+                uuid="00000000-0000-0000-0000-000000000099",
+            ),
+        )
+        db.add(node)
+        db.commit()
+        node_id = node.id
+    finally:
+        db.close()
+
+    edit = client.put(
+        f"/api/nodes/{node_id}",
+        json={"name": "should-not-change"},
+        headers=auth_headers,
+    )
+    assert edit.status_code == 400
+    assert "上游节点" in edit.json()["detail"]
+
+    disable = client.put(
+        f"/api/nodes/{node_id}",
+        json={"enabled": False},
+        headers=auth_headers,
+    )
+    assert disable.status_code == 200
+    assert disable.json()["enabled"] is False
+
+    db = SessionLocal()
+    try:
+        stored = db.get(Node, node_id)
+        assert stored is not None
+        assert stored.source_id is not None
+        assert stored.source_type == "upstream"
+        assert stored.name == "upstream-node"
+    finally:
+        db.close()
 
 
 def test_self_node_replaces_upstream(

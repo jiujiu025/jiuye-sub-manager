@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
@@ -16,11 +16,14 @@ from app.schemas.node import (
     NodeDetail,
     NodeImportRequest,
     NodeImportResult,
+    NodeExportResponse,
     NodeSummary,
     NodeUpdate,
 )
+from app.schemas.node_health import NodeHealthResponse
 from app.services.node_import_service import NodeImportService
 from app.services.node_service import NodeService
+from app.exporters import export_nodes
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -97,6 +100,47 @@ def create_self_node(
     """添加自有 VLESS/SS 节点。"""
 
     return NodeService(db).create(payload, admin)
+
+
+@router.get("/{node_id}/health", response_model=NodeHealthResponse)
+def get_node_health(
+    node_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin),
+) -> NodeHealthResponse:
+    """返回节点健康状态接口；未启用探测前统一为 unknown。"""
+
+    node = NodeRepository(db).get(node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    return NodeHealthResponse(node_id=node.id, status="unknown")
+
+
+@router.get("/{node_id}/export", response_model=NodeExportResponse)
+def export_node(
+    node_id: int,
+    format: str = Query(default="uri"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin),
+) -> NodeExportResponse:
+    """导出单个节点的标准分享链接。"""
+
+    node = NodeRepository(db).get(node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    output_format = format.strip().lower()
+    if output_format != "uri":
+        raise HTTPException(status_code=400, detail="单节点分享目前仅支持 URI 格式")
+    content, node_count = export_nodes([(node, node.name)], output_format)
+    if node_count != 1:
+        raise HTTPException(status_code=400, detail="该节点缺少可导出字段或暂不支持分享")
+    return NodeExportResponse(
+        node_id=node.id,
+        name=node.name,
+        type=node.type,
+        format=output_format,
+        content=content.strip(),
+    )
 
 
 @router.get("/{node_id}", response_model=NodeDetail)

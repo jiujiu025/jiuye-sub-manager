@@ -63,12 +63,14 @@ class SyncScheduler:
 
     def run_all(self) -> None:
         db = SessionLocal()
+        service = SyncService(db)
         try:
-            results = SyncService(db).sync_all_enabled()
+            results = service.sync_all_enabled()
             failed = [r.source_name for r in results if r.status == "failed"]
             if failed:
                 logger.warning("本次定时同步失败来源：%s", ", ".join(failed))
         finally:
+            service.client.close()
             db.close()
 
 
