@@ -32,8 +32,16 @@ def _subscription_disposition(package, output_format: str) -> str:
 
     name = display_subscription_name(package)
     encoded = quote(name, safe="")
+    # ASCII fallback 兼容不识别 filename* 的客户端；真实名称由 filename* 提供。
+    ascii_name = "".join(
+        char
+        if char.isascii() and (char.isalnum() or char in "._-")
+        else "-"
+        for char in name
+    )
+    ascii_name = ascii_name.strip(" ._-") or "subscription"
     extension = "json" if output_format == "singbox" else "txt" if output_format in {"uri", "base64"} else "yaml"
-    return f'inline; filename="subscription.{extension}"; filename*=UTF-8\'\'{encoded}'
+    return f'inline; filename="{ascii_name}.{extension}"; filename*=UTF-8\'\'{encoded}'
 
 
 def _content_type(output_format: str) -> str:
@@ -63,6 +71,8 @@ def _subscription_headers(package, output_format: str, content: str) -> dict[str
             updated_at.astimezone(timezone.utc), usegmt=True
         ),
         "Profile-Update-Interval": "3600",
+        # V2RayN/V2RayNG/Hiddify/NekoBox 等客户端会使用该订阅标题。
+        "Profile-Title": quote(display_subscription_name(package), safe=""),
         "X-Subscription-Client": output_format,
         "X-Subscription-Updated-At": updated_at.astimezone(timezone.utc).isoformat(),
         "X-Content-Type-Options": "nosniff",

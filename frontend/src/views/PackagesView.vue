@@ -27,13 +27,25 @@
       />
       <el-select
         v-model="statusFilter"
-        placeholder="状态：全部"
+        placeholder="可用状态：全部"
         clearable
         style="width: 150px"
       >
-        <el-option label="开启" value="enabled" />
-        <el-option label="禁用" value="disabled" />
+        <el-option label="可用" value="available" />
+        <el-option label="已停机" value="stopped" />
       </el-select>
+      <el-select
+        v-model="sortFilter"
+        placeholder="排序：默认"
+        clearable
+        style="width: 190px"
+      >
+        <el-option label="到期日期：最近优先" value="expires_asc" />
+        <el-option label="到期日期：最晚优先" value="expires_desc" />
+        <el-option label="开通日期：最新优先" value="created_desc" />
+        <el-option label="开通日期：最早优先" value="created_asc" />
+      </el-select>
+      <span class="filter-hint">客户端支持时每小时自动更新</span>
       <div class="spacer" />
     </div>
 
@@ -52,12 +64,12 @@
               <span class="package-index">#{{ index + 1 }}</span>
               {{ pkg.name }}
               <el-tag
-                :type="pkg.enabled ? 'success' : 'info'"
+                :type="isAvailable(pkg) ? 'success' : 'danger'"
                 effect="light"
                 round
                 size="small"
               >
-                {{ pkg.enabled ? '开启' : '禁用' }}
+                {{ isAvailable(pkg) ? '可用' : '已停机' }}
               </el-tag>
               <el-tag
                 :type="isExpired(pkg) ? 'danger' : 'warning'"
@@ -124,8 +136,14 @@
         </div>
 
         <div class="package-updated">
-          <span class="meta-label">更新时间</span>
-          <span class="updated-value">{{ formatTime(pkg.updated_at) }}</span>
+          <div>
+            <span class="meta-label">开通日期</span>
+            <span class="updated-value">{{ formatTime(pkg.created_at) }}</span>
+          </div>
+          <div class="package-date-end">
+            <span class="meta-label">到期日期</span>
+            <span class="updated-value">{{ pkg.expires_at ? formatTime(pkg.expires_at) : '长期有效' }}</span>
+          </div>
         </div>
 
         <div class="package-actions">
@@ -446,7 +464,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="qrVisible" title="订阅二维码" width="380px" append-to-body>
+    <el-dialog v-model="qrVisible" :title="`订阅二维码 · ${qrName}`" width="380px" append-to-body>
       <div class="qr-body">
         <img v-if="qrDataUrl" :src="qrDataUrl" alt="订阅二维码" class="qr-image" />
         <div class="qr-url">{{ qrUrl }}</div>
@@ -457,7 +475,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import QRCode from 'qrcode'
 import {
@@ -499,9 +517,12 @@ const selfNodes = ref([])
 const selfNodeSearch = ref('')
 const searchKeyword = ref('')
 const statusFilter = ref('')
+const sortFilter = ref('')
+const nowTick = ref(Date.now())
 const qrVisible = ref(false)
 const qrDataUrl = ref('')
 const qrUrl = ref('')
+const qrName = ref('')
 const renameForm = reactive({
   prefix: '',
   suffix: '',
@@ -536,15 +557,20 @@ const form = reactive({
 
 const filteredPackages = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
-  return packages.value.filter((pkg) => {
-    if (statusFilter.value === 'enabled' && !pkg.enabled) return false
-    if (statusFilter.value === 'disabled' && pkg.enabled) return false
+  const result = packages.value.filter((pkg) => {
+    if (statusFilter.value === 'available' && !isAvailable(pkg)) return false
+    if (statusFilter.value === 'stopped' && isAvailable(pkg)) return false
     if (keyword) {
       const name = `${pkg.name} ${pkg.subscription_name || ''}`.toLowerCase()
       if (!name.includes(keyword)) return false
     }
     return true
   })
+
+  if (sortFilter.value) {
+    result.sort((left, right) => comparePackages(left, right, sortFilter.value))
+  }
+  return result
 })
 
 const filteredSelfNodes = computed(() => {
@@ -752,7 +778,35 @@ function toUtcIso(value) {
 }
 
 function isExpired(pkg) {
-  return Boolean(pkg.expires_at && new Date(pkg.expires_at).getTime() <= Date.now())
+  // 让页面长时间打开时，套餐到期状态也能自动切换。
+  void nowTick.value
+  return Boolean(pkg.expires_at && new Date(pkg.expires_at).getTime() <= nowTick.value)
+}
+
+function isAvailable(pkg) {
+  return Boolean(pkg.enabled && !pkg.token_revoked_at && !isExpired(pkg))
+}
+
+function comparePackages(left, right, mode) {
+  if (mode.startsWith('created_')) {
+    const leftTime = dateTimestamp(left.created_at, 0)
+    const rightTime = dateTimestamp(right.created_at, 0)
+    return mode === 'created_asc'
+      ? leftTime - rightTime || left.id - right.id
+      : rightTime - leftTime || right.id - left.id
+  }
+
+  const leftTime = dateTimestamp(left.expires_at, Number.POSITIVE_INFINITY)
+  const rightTime = dateTimestamp(right.expires_at, Number.POSITIVE_INFINITY)
+  return mode === 'expires_asc'
+    ? leftTime - rightTime || left.id - right.id
+    : rightTime - leftTime || right.id - left.id
+}
+
+function dateTimestamp(value, emptyValue) {
+  if (!value) return emptyValue
+  const timestamp = new Date(value).getTime()
+  return Number.isNaN(timestamp) ? emptyValue : timestamp
 }
 
 function expirationLabel(pkg) {
@@ -893,6 +947,7 @@ async function showQr(row) {
   try {
     const { data } = await getPackageSubscriptionUrl(row.id)
     qrUrl.value = data.subscription_url
+    qrName.value = row.subscription_name || row.name
     qrDataUrl.value = await QRCode.toDataURL(data.subscription_url, {
       width: 240,
       margin: 1
@@ -960,17 +1015,32 @@ function formatTime(value) {
   return value ? new Date(value).toLocaleString() : '-'
 }
 
+let expiryTimer
+
 onMounted(() => {
   load()
   loadSources()
   loadUsers()
   loadSelfNodes()
+  expiryTimer = window.setInterval(() => {
+    nowTick.value = Date.now()
+  }, 60 * 1000)
+})
+
+onUnmounted(() => {
+  if (expiryTimer) window.clearInterval(expiryTimer)
 })
 </script>
 
 <style scoped>
 .spacer {
   flex: 1;
+}
+
+.filter-hint {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .dialog-subtitle {
@@ -1077,6 +1147,10 @@ onMounted(() => {
   justify-content: space-between;
   padding-top: 12px;
   border-top: 1px solid var(--app-border);
+}
+
+.package-date-end {
+  text-align: right;
 }
 
 .updated-value {
@@ -1275,6 +1349,10 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .filter-hint {
+    width: 100%;
+  }
+
   .package-meta {
     grid-template-columns: 1fr;
   }

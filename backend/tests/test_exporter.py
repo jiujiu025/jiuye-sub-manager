@@ -98,6 +98,42 @@ def test_singbox_vless_reality_preserves_flow() -> None:
     assert outbound["flow"] == "xtls-rprx-vision"
 
 
+def test_uri_vless_reality_preserves_standard_connection_parameters() -> None:
+    """VLESS Reality URI 不应丢失 encryption、flow、headerType 和 spx。"""
+
+    from app.exporters.uri import UriExporter
+
+    node = _make_node(
+        name="Reality URI",
+        node_type="vless",
+        server="reality-uri.example.com",
+        port=30250,
+        uuid="00000000-0000-0000-0000-000000000101",
+        network="tcp",
+        security="reality",
+        tls=True,
+        sni="apple.com",
+        fingerprint="chrome",
+        public_key="public-key",
+        short_id="short-id",
+        metadata_json={
+            "encryption": "none",
+            "flow": "xtls-rprx-vision",
+            "headerType": "none",
+            "spx": "/",
+        },
+    )
+
+    uri = UriExporter().export([(node, node.name)]).strip()
+    assert "encryption=none" in uri
+    assert "flow=xtls-rprx-vision" in uri
+    assert "headerType=none" in uri
+    assert "spx=%2F" in uri
+    assert "security=reality" in uri
+    assert "pbk=public-key" in uri
+    assert "sid=short-id" in uri
+
+
 def test_export_plain_vless_tls_unchanged() -> None:
     """普通 VLESS（无 Reality 字段）的 tls 状态不应被强制改为 true。"""
 

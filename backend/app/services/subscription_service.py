@@ -18,6 +18,7 @@ from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
 from app.repositories.package_repo import PackageRepository
 from app.schemas.package import PreviewNode
+from app.services.package_service import display_subscription_name
 from app.utils.node_rules import (
     apply_numbering,
     apply_rename_rules,
@@ -126,7 +127,7 @@ class SubscriptionService:
         content, node_count = export_nodes(
             items,
             output_format,
-            subscription_name=package.subscription_name or package.name,
+            subscription_name=display_subscription_name(package),
         )
         if node_count == 0:
             raise BusinessError("套餐暂无可用节点", status_code=404)

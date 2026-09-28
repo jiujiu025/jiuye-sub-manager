@@ -45,6 +45,14 @@ class UriExporter(BaseExporter):
         authority = _authority(node.server, node.port)
         if node.type == "vless":
             params: dict[str, str] = {}
+            metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+            # 保留 VLESS 标准 URI 中容易影响 Reality/Vision 连接的参数。
+            for key in ("encryption", "flow", "headerType", "spx", "packetEncoding"):
+                value = metadata.get(key)
+                if value is not None and str(value) != "":
+                    params[key] = str(value)
+            if "encryption" not in params:
+                params["encryption"] = "none"
             if node.network:
                 params["type"] = node.network
             security = str(node.security or "").lower()
@@ -65,7 +73,8 @@ class UriExporter(BaseExporter):
             if node.host:
                 params["host"] = node.host
             query = urlencode(params)
-            return f"vless://{quote(node.uuid or '', safe='')}@{authority}?{query}#{_fragment(name)}"
+            query_suffix = f"?{query}" if query else ""
+            return f"vless://{quote(node.uuid or '', safe='')}@{authority}{query_suffix}#{_fragment(name)}"
         if node.type == "shadowsocks":
             auth = base64.urlsafe_b64encode(
                 f"{node.cipher}:{node.password}".encode("utf-8")

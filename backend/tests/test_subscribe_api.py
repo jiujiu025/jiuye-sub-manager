@@ -271,6 +271,52 @@ def test_active_subscription_advertises_hourly_refresh(
     assert "refresh-interval.example.com" in response.text
 
 
+def test_subscription_headers_advertise_display_name_for_client_import(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """客户端扫码或导入时应能从响应头取得套餐显示名称。"""
+
+    db = SessionLocal()
+    try:
+        _add_node(
+            db,
+            name="二维码备注节点",
+            server="qr-name.example.com",
+            uuid="qr-name-uuid",
+            country="香港",
+        )
+        db.commit()
+        node_id = db.scalar(select(Node.id).where(Node.server == "qr-name.example.com"))
+    finally:
+        db.close()
+
+    created = client.post(
+        "/api/packages",
+        json={
+            "name": "后台套餐名",
+            "subscription_name": "手机主订阅",
+            "rules": {"node_ids": [node_id]},
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    token = created.json()["token"]
+
+    response = client.get(f"/sub/{token}?client=clash")
+    assert response.status_code == 200
+    assert response.headers["profile-title"] == "%E6%89%8B%E6%9C%BA%E4%B8%BB%E8%AE%A2%E9%98%85"
+    disposition = response.headers["content-disposition"]
+    assert "filename*=UTF-8''%E6%89%8B%E6%9C%BA%E4%B8%BB%E8%AE%A2%E9%98%85" in disposition
+    assert 'filename="subscription.yaml"' in disposition
+    assert "\n" not in disposition and '"手机主订阅"' not in disposition
+    assert "qr-name.example.com" in response.text
+
+    for client_format in ("mihomo", "singbox", "uri", "base64"):
+        formatted = client.get(f"/sub/{token}?client={client_format}")
+        assert formatted.status_code == 200
+        assert formatted.headers["profile-title"] == "%E6%89%8B%E6%9C%BA%E4%B8%BB%E8%AE%A2%E9%98%85"
+
+
 def test_expired_subscription_bypasses_cache_and_returns_notice_for_all_formats(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
