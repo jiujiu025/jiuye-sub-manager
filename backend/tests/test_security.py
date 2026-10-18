@@ -39,6 +39,34 @@ def test_fixed_jwt_secret_survives_settings_reload(monkeypatch) -> None:
     assert jwt.decode(jwt_token, second_settings.jwt_secret_key, algorithms=["HS256"])["sub"] == "admin"
 
 
+def test_dedicated_encryption_key_survives_jwt_rotation(monkeypatch) -> None:
+    """独立加密密钥固定后，JWT 密钥变化不影响已保存的敏感值。"""
+
+    monkeypatch.setenv("JWT_SECRET_KEY", "jwt-secret-before-rotation-1234567890")
+    monkeypatch.setenv("ENCRYPTION_KEY", "encryption-secret-that-stays-fixed-123456")
+    monkeypatch.setattr(config, "_settings", None)
+    encrypted = encrypt_secret("three-xui-api-token")
+
+    monkeypatch.setenv("JWT_SECRET_KEY", "jwt-secret-after-rotation-1234567890")
+    monkeypatch.setattr(config, "_settings", None)
+
+    assert decrypt_secret(encrypted) == "three-xui-api-token"
+
+
+def test_dedicated_encryption_key_reads_legacy_jwt_ciphertext(monkeypatch) -> None:
+    """切换到独立密钥后仍可以读取旧版 JWT 派生密文。"""
+
+    monkeypatch.setenv("JWT_SECRET_KEY", "legacy-jwt-secret-123456789012345678")
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(config, "_settings", None)
+    encrypted = encrypt_secret("legacy-token")
+
+    monkeypatch.setenv("ENCRYPTION_KEY", "new-encryption-secret-123456789012345678")
+    monkeypatch.setattr(config, "_settings", None)
+
+    assert decrypt_secret(encrypted) == "legacy-token"
+
+
 def test_production_requires_fixed_jwt_secret(monkeypatch) -> None:
     """生产环境缺少固定 JWT 密钥时必须拒绝启动。"""
 

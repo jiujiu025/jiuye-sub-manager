@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +47,7 @@ class UserCreateRequest(BaseModel):
 
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=128)
+    role: Literal["user", "manager"] = "user"
 
 
 class UserUpdateRequest(BaseModel):
@@ -54,3 +56,4 @@ class UserUpdateRequest(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=64)
     password: str | None = Field(default=None, min_length=8, max_length=128)
     is_active: bool | None = None
+    role: Literal["user", "manager"] | None = None

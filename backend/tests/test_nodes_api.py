@@ -91,6 +91,53 @@ def test_list_nodes_with_filter(client: TestClient, auth_headers: dict[str, str]
     assert response.json()["total"] >= 1
 
 
+def test_list_nodes_separates_subscription_and_custom_nodes(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """节点分类按来源 ID 判断，分页筛选不能把两类节点混在一起。"""
+
+    source = client.post(
+        "/api/sources",
+        json={"name": "分类测试来源", "url": "https://example.com/subscription"},
+        headers=auth_headers,
+    )
+    assert source.status_code == 201
+    source_id = source.json()["id"]
+    db = SessionLocal()
+    try:
+        db.add(
+            Node(
+                source_id=source_id,
+                source_name="分类测试来源",
+                source_type="upstream",
+                original_name="上游分类节点",
+                name="上游分类节点",
+                type="vless",
+                server="upstream.example.com",
+                port=443,
+                uuid="00000000-0000-4000-0000-000000000011",
+                node_fingerprint=build_node_fingerprint(
+                    node_type="vless",
+                    server="upstream.example.com",
+                    port=443,
+                    uuid="00000000-0000-4000-0000-000000000011",
+                ),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    subscription_nodes = client.get(
+        "/api/nodes?source_kind=subscription", headers=auth_headers
+    )
+    custom_nodes = client.get("/api/nodes?source_kind=custom", headers=auth_headers)
+    assert subscription_nodes.status_code == 200
+    assert custom_nodes.status_code == 200
+    assert any(item["source_id"] == source_id for item in subscription_nodes.json()["items"])
+    assert all(item["source_id"] is None for item in custom_nodes.json()["items"])
+
+
 def test_create_self_vless_node(client: TestClient, auth_headers: dict[str, str]) -> None:
     """自有 VLESS 节点应自动识别国家并写入节点池。"""
 
@@ -147,6 +194,45 @@ def test_anytls_import_and_single_node_export(
     assert exported.json()["content"].startswith("anytls://")
 
 
+def test_legacy_socks5_node_can_be_shared(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """历史记录保存为 socks5 类型时，单节点分享仍应正常工作。"""
+
+    db = SessionLocal()
+    try:
+        node = Node(
+            source_id=None,
+            source_name="导入外部节点",
+            original_name="149.52.61.103",
+            name="149.52.61.103",
+            type="socks5",
+            server="149.52.61.103",
+            port=5001,
+            username="legacy-user",
+            password="legacy-pass",
+            node_fingerprint=build_node_fingerprint(
+                node_type="socks5",
+                server="149.52.61.103",
+                port=5001,
+                username="legacy-user",
+                password="legacy-pass",
+            ),
+        )
+        db.add(node)
+        db.commit()
+        node_id = node.id
+    finally:
+        db.close()
+
+    exported = client.get(f"/api/nodes/{node_id}/export", headers=auth_headers)
+
+    assert exported.status_code == 200
+    assert exported.json()["content"].startswith(
+        "socks://legacy-user:legacy-pass@149.52.61.103:5001"
+    )
+
+
 def test_node_health_returns_unknown_without_active_probe(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -201,6 +287,171 @@ def test_create_self_node_missing_fields(
         headers=auth_headers,
     )
     assert ss_response.status_code == 400
+
+
+def test_node_code_is_monotonic_and_note_is_searchable(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """节点编号删除后不复用，备注可以通过节点关键词检索。"""
+
+    first = client.post(
+        "/api/nodes",
+        json={
+            "name": "编号节点一",
+            "type": "vless",
+            "server": "code-one.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-4000-8000-000000000101",
+            "note": "主线路备注",
+        },
+        headers=auth_headers,
+    )
+    assert first.status_code == 201
+    first_payload = first.json()
+    assert first_payload["node_code"].startswith("N-")
+    assert first_payload["note"] == "主线路备注"
+
+    found = client.get(
+        "/api/nodes", params={"keyword": "主线路备注"}, headers=auth_headers
+    )
+    assert found.status_code == 200
+    assert any(item["id"] == first_payload["id"] for item in found.json()["items"])
+
+    deleted = client.delete(f"/api/nodes/{first_payload['id']}", headers=auth_headers)
+    assert deleted.status_code == 204
+
+    second = client.post(
+        "/api/nodes",
+        json={
+            "name": "编号节点二",
+            "type": "vless",
+            "server": "code-two.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-4000-8000-000000000102",
+        },
+        headers=auth_headers,
+    )
+    assert second.status_code == 201
+    assert second.json()["node_code"] != first_payload["node_code"]
+    assert int(second.json()["node_code"].split("-")[-1]) > int(
+        first_payload["node_code"].split("-")[-1]
+    )
+
+
+def test_node_usage_reports_packages_and_customer_subscriptions(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """节点使用关系应同时返回直接选中的套餐和客户订阅。"""
+
+    node = client.post(
+        "/api/nodes",
+        json={
+            "name": "使用关系节点",
+            "type": "vless",
+            "server": "usage.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-4000-8000-000000000103",
+        },
+        headers=auth_headers,
+    )
+    assert node.status_code == 201
+    node_id = node.json()["id"]
+    package = client.post(
+        "/api/packages",
+        json={"name": "节点使用关系套餐", "rules": {"node_ids": [node_id]}},
+        headers=auth_headers,
+    )
+    assert package.status_code == 201
+    customer = client.post(
+        "/api/customers",
+        json={"name": "节点使用关系客户"},
+        headers=auth_headers,
+    )
+    assert customer.status_code == 201
+    subscription = client.post(
+        "/api/subscriptions",
+        json={"package_id": package.json()["id"], "customer_id": customer.json()["id"]},
+        headers=auth_headers,
+    )
+    assert subscription.status_code == 201
+
+    usage = client.get(f"/api/nodes/{node_id}/usage", headers=auth_headers)
+    assert usage.status_code == 200
+    payload = usage.json()
+    target_package = next(
+        item for item in payload["packages"] if item["package_id"] == package.json()["id"]
+    )
+    assert "直接选中" in target_package["match_types"]
+    assert payload["customer_subscription_count"] >= 1
+    assert any(
+        item["customer_name"] == "节点使用关系客户"
+        and item["package_id"] == package.json()["id"]
+        for item in payload["customer_subscriptions"]
+    )
+
+
+def test_node_usage_reports_inherited_customer_manager(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """订阅未单独指定经理时，节点使用关系应显示客户默认经理。"""
+
+    manager = client.post(
+        "/api/users",
+        json={
+            "username": "usage-manager",
+            "password": "ManagerPass123!",
+            "role": "manager",
+        },
+        headers=auth_headers,
+    )
+    assert manager.status_code == 201
+    node = client.post(
+        "/api/nodes",
+        json={
+            "name": "继承经理节点",
+            "type": "vless",
+            "server": "inherited-manager.example.com",
+            "port": 443,
+            "uuid": "00000000-0000-4000-8000-000000000104",
+        },
+        headers=auth_headers,
+    )
+    assert node.status_code == 201
+    package = client.post(
+        "/api/packages",
+        json={
+            "name": "继承经理套餐",
+            "rules": {"node_ids": [node.json()["id"]]},
+        },
+        headers=auth_headers,
+    )
+    assert package.status_code == 201
+    customer = client.post(
+        "/api/customers",
+        json={"name": "继承经理客户", "manager_user_id": manager.json()["id"]},
+        headers=auth_headers,
+    )
+    assert customer.status_code == 201
+    subscription = client.post(
+        "/api/subscriptions",
+        json={
+            "package_id": package.json()["id"],
+            "customer_id": customer.json()["id"],
+        },
+        headers=auth_headers,
+    )
+    assert subscription.status_code == 201
+
+    usage = client.get(
+        f"/api/nodes/{node.json()['id']}/usage", headers=auth_headers
+    )
+    assert usage.status_code == 200
+    inherited = next(
+        item
+        for item in usage.json()["customer_subscriptions"]
+        if item["subscription_id"] == subscription.json()["id"]
+    )
+    assert inherited["manager_username"] == "usage-manager"
 
 
 @pytest.mark.parametrize("uuid", ["not-a-uuid", "1234"])

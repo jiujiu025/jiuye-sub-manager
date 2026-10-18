@@ -7,18 +7,28 @@ from abc import ABC, abstractmethod
 from app.models.node import Node
 
 
+def canonical_node_type(node_type: str | None) -> str:
+    """统一历史数据中的 SOCKS5 协议别名。"""
+
+    value = str(node_type or "").strip().lower()
+    if value in {"socks", "socks5", "sk5"}:
+        return "socks"
+    return value
+
+
 def is_exportable(node: Node) -> bool:
     """检查节点是否具备对应协议导出所需的基础字段。"""
 
     if not node.server or not isinstance(node.port, int) or not 0 < node.port < 65536:
         return False
-    if node.type in {"vless", "vmess", "tuic"}:
+    node_type = canonical_node_type(node.type)
+    if node_type in {"vless", "vmess", "tuic"}:
         return bool(node.uuid)
-    if node.type == "shadowsocks":
+    if node_type == "shadowsocks":
         return bool(node.cipher and node.password)
-    if node.type in {"trojan", "hysteria", "hysteria2", "anytls"}:
+    if node_type in {"trojan", "hysteria", "hysteria2", "anytls"}:
         return bool(node.password)
-    return node.type in {"socks", "http"}
+    return node_type in {"socks", "http"}
 
 
 class BaseExporter(ABC):
@@ -70,12 +80,21 @@ def exportable_items_for_format(
             "vless", "shadowsocks", "vmess", "trojan", "socks", "http",
             "hysteria", "hysteria2", "tuic", "anytls",
         },
-        "singbox": {"vless", "shadowsocks", "vmess", "trojan", "anytls"},
-        "uri": {"vless", "shadowsocks", "vmess", "trojan", "anytls"},
-        "base64": {"vless", "shadowsocks", "vmess", "trojan", "anytls"},
+        "singbox": {
+            "vless", "vmess", "shadowsocks", "trojan", "anytls",
+            "socks", "http", "hysteria", "hysteria2", "tuic",
+        },
+        "uri": {
+            "vless", "shadowsocks", "vmess", "trojan", "anytls", "socks", "http",
+            "hysteria", "hysteria2", "tuic",
+        },
+        "base64": {
+            "vless", "shadowsocks", "vmess", "trojan", "anytls", "socks", "http",
+            "hysteria", "hysteria2", "tuic",
+        },
     }
     return [
         (node, name)
         for node, name in exportable_items(items)
-        if node.type in supported.get(output_format, set())
+        if canonical_node_type(node.type) in supported.get(output_format, set())
     ]

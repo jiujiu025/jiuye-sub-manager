@@ -77,14 +77,19 @@ def mask_secret(value: str, keep_head: int = 6, keep_tail: int = 4) -> str:
     return f"{value[:keep_head]}...{value[-keep_tail:]}"
 
 
+def _fernet_for_secret(secret: str) -> Fernet:
+    """将配置字符串稳定派生为 Fernet 密钥。"""
+
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
+
+
 def _fernet() -> Fernet:
-    """从 JWT_SECRET_KEY 派生 Fernet 密钥，数据库不保存明文 Token。"""
+    """使用独立加密密钥；未配置时兼容使用固定 JWT 密钥。"""
 
     settings = get_settings()
-    key = base64.urlsafe_b64encode(
-        hashlib.sha256(settings.jwt_secret_key.encode("utf-8")).digest()
-    )
-    return Fernet(key)
+    secret = settings.encryption_key or settings.jwt_secret_key
+    return _fernet_for_secret(secret)
 
 
 def encrypt_secret(value: str) -> str:
@@ -94,6 +99,19 @@ def encrypt_secret(value: str) -> str:
 
 
 def decrypt_secret(value: str) -> str:
-    """解密数据库中的敏感值；仅用于认证后台展示订阅地址。"""
+    """解密敏感值，并兼容迁移前使用 JWT 密钥保存的旧密文。"""
 
-    return _fernet().decrypt(value.encode("utf-8")).decode("utf-8")
+    encrypted = value.encode("utf-8")
+    settings = get_settings()
+    candidates = [settings.encryption_key or settings.jwt_secret_key]
+    if settings.encryption_key and settings.jwt_secret_key != settings.encryption_key:
+        candidates.append(settings.jwt_secret_key)
+    last_error: Exception | None = None
+    for secret in dict.fromkeys(candidates):
+        try:
+            return _fernet_for_secret(secret).decrypt(encrypted).decode("utf-8")
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise ValueError("无法解密敏感值")

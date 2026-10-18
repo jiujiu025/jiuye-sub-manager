@@ -51,6 +51,7 @@ class PackageRepository:
         token_prefix: str,
         token_encrypted: str,
         owner_user_id: int | None = None,
+        owner_customer_id: int | None = None,
         token_name: str | None = None,
     ) -> Package:
         package = Package(
@@ -63,6 +64,7 @@ class PackageRepository:
             token_prefix=token_prefix,
             token_encrypted=token_encrypted,
             owner_user_id=owner_user_id,
+            owner_customer_id=owner_customer_id,
             token_name=token_name,
         )
         self.db.add(package)

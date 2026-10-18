@@ -27,12 +27,14 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "sqlite:///./data/sub_manager.db"
     jwt_secret_key: str = ""
+    encryption_key: str = ""
     jwt_expire_minutes: int = 720
     jwt_algorithm: str = "HS256"
     admin_username: str = "admin"
     admin_password: str = ""
     sync_interval_minutes: int = 5
     sync_enabled: bool = True
+    scheduler_enabled: bool = True
     cache_ttl_seconds: int = 300
     http_timeout_seconds: float = 15.0
     upstream_user_agent: str = (
@@ -46,6 +48,21 @@ class Settings(BaseSettings):
     login_rate_window_seconds: int = 60
     subscription_rate_limit: int = 120
     subscription_rate_window_seconds: int = 60
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    wecom_bot_webhook: str = ""
+    sing_box_path: str = "sing-box"
+    health_probe_mode: str = "full"
+    health_test_url: str = "https://www.gstatic.com/generate_204"
+    health_timeout_seconds: float = 5.0
+    health_probe_concurrency: int = 20
+    geoip_enabled: bool = True
+    geoip_api_url: str = "https://ipwho.is/{ip}"
+    geoip_timeout_seconds: float = 4.0
+    geoip_cache_ttl_hours: int = 168
+    geoip_error_retry_minutes: int = 30
+    geoip_batch_size: int = 100
+    geoip_interval_minutes: int = 10
 
 
 _settings: Settings | None = None
@@ -87,5 +104,10 @@ def get_settings() -> Settings:
             settings.jwt_secret_key = secrets.token_urlsafe(48)
             logger.warning(
                 "未检测到 JWT_SECRET_KEY，已生成随机临时密钥；生产环境必须在 .env 中配置固定密钥"
+            )
+        if not settings.encryption_key:
+            logger.warning(
+                "未检测到 ENCRYPTION_KEY，将兼容使用 JWT_SECRET_KEY 加密敏感数据；"
+                "生产环境建议配置固定的独立加密密钥"
             )
     return _settings

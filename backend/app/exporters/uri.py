@@ -8,6 +8,7 @@ from urllib.parse import quote, urlencode
 
 from app.exporters.base import (
     BaseExporter,
+    canonical_node_type,
     exportable_items_for_format,
     unique_display_names,
 )
@@ -43,7 +44,8 @@ class UriExporter(BaseExporter):
     @staticmethod
     def _to_uri(node: Node, name: str) -> str:
         authority = _authority(node.server, node.port)
-        if node.type == "vless":
+        node_type = canonical_node_type(node.type)
+        if node_type == "vless":
             params: dict[str, str] = {}
             metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
             # 保留 VLESS 标准 URI 中容易影响 Reality/Vision 连接的参数。
@@ -75,12 +77,19 @@ class UriExporter(BaseExporter):
             query = urlencode(params)
             query_suffix = f"?{query}" if query else ""
             return f"vless://{quote(node.uuid or '', safe='')}@{authority}{query_suffix}#{_fragment(name)}"
-        if node.type == "shadowsocks":
+        if node_type == "shadowsocks":
             auth = base64.urlsafe_b64encode(
                 f"{node.cipher}:{node.password}".encode("utf-8")
             ).decode("ascii").rstrip("=")
-            return f"ss://{auth}@{authority}#{_fragment(name)}"
-        if node.type == "vmess":
+            metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+            query_params = {
+                key: str(metadata[key])
+                for key in ("plugin", "type", "uot", "udp")
+                if metadata.get(key) is not None and str(metadata[key]) != ""
+            }
+            query = f"?{urlencode(query_params)}" if query_params else ""
+            return f"ss://{auth}@{authority}{query}#{_fragment(name)}"
+        if node_type == "vmess":
             metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
             payload = {
                 "v": "2",
@@ -100,7 +109,7 @@ class UriExporter(BaseExporter):
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
             ).decode("ascii")
             return f"vmess://{encoded}"
-        if node.type == "trojan":
+        if node_type == "trojan":
             params: dict[str, str] = {"security": "tls" if node.tls else "none"}
             if node.network:
                 params["type"] = node.network
@@ -116,7 +125,7 @@ class UriExporter(BaseExporter):
                 f"trojan://{quote(node.password or '', safe='')}@{authority}"
                 f"?{urlencode(params)}#{_fragment(name)}"
             )
-        if node.type == "anytls":
+        if node_type == "anytls":
             metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
             params: dict[str, str] = {"security": "tls"}
             if node.sni:
@@ -129,4 +138,46 @@ class UriExporter(BaseExporter):
                 f"anytls://{quote(node.password or '', safe='')}@{authority}"
                 f"?{urlencode(params)}#{_fragment(name)}"
             )
+        if node_type == "socks":
+            userinfo = ""
+            if node.username is not None or node.password is not None:
+                userinfo = (
+                    f"{quote(node.username or '', safe='')}:{quote(node.password or '', safe='')}@"
+                )
+            # V2Ray/NekoBox 的通用分享格式使用 socks://，解析端同时兼容 socks5://。
+            return f"socks://{userinfo}{authority}#{_fragment(name)}"
+        if node_type == "http":
+            scheme = "https" if node.tls else "http"
+            userinfo = ""
+            if node.username is not None or node.password is not None:
+                userinfo = (
+                    f"{quote(node.username or '', safe='')}:{quote(node.password or '', safe='')}@"
+                )
+            return f"{scheme}://{userinfo}{authority}#{_fragment(name)}"
+        if node_type == "hysteria":
+            metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+            params = {key: str(value) for key, value in metadata.items() if value is not None and str(value) != ""}
+            params["auth"] = node.password or params.get("auth") or params.get("auth_str", "")
+            if node.sni:
+                params["sni"] = node.sni
+            params = {key: value for key, value in params.items() if value != ""}
+            query = f"?{urlencode(params)}" if params else ""
+            return f"hysteria://{authority}{query}#{_fragment(name)}"
+        if node_type == "hysteria2":
+            metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+            params = {key: str(value) for key, value in metadata.items() if value is not None and str(value) != ""}
+            if node.sni:
+                params["sni"] = node.sni
+            if not node.tls:
+                params["insecure"] = "1"
+            query = f"?{urlencode(params)}" if params else ""
+            return f"hysteria2://{quote(node.password or '', safe='')}@{authority}{query}#{_fragment(name)}"
+        if node_type == "tuic":
+            metadata = node.metadata_json if isinstance(node.metadata_json, dict) else {}
+            params = {key: str(value) for key, value in metadata.items() if value is not None and str(value) != ""}
+            if node.sni:
+                params["sni"] = node.sni
+            query = f"?{urlencode(params)}" if params else ""
+            userinfo = f"{quote(node.uuid or '', safe='')}:{quote(node.password or '', safe='')}"
+            return f"tuic://{userinfo}@{authority}{query}#{_fragment(name)}"
         raise ValueError(f"不支持导出的节点类型: {node.type}")

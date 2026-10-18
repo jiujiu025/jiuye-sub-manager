@@ -21,10 +21,19 @@ def auth_headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _import(client: TestClient, headers: dict, content: str, subtype: str = "custom_url"):
+def _import(
+    client: TestClient,
+    headers: dict,
+    content: str,
+    subtype: str = "custom_url",
+    note: str | None = None,
+):
+    payload = {"content": content, "source_subtype": subtype, "format": "auto"}
+    if note is not None:
+        payload["note"] = note
     return client.post(
         "/api/nodes/import",
-        json={"content": content, "source_subtype": subtype, "format": "auto"},
+        json=payload,
         headers=headers,
     )
 
@@ -198,6 +207,36 @@ def test_import_shadowsocks(client: TestClient, auth_headers: dict) -> None:
     uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@ss-import.example.com:8388#%E6%97%A5%E6%9C%AC01"
     result = _import(client, auth_headers, uri).json()
     assert result["success"] == 1
+
+
+def test_import_sip002_shadowsocks_with_query_and_preserve_share_uri(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """SIP002 的查询参数不能被误判为端口，导入备注和分享 URI 都应保留。"""
+
+    auth = base64.urlsafe_b64encode(
+        b"2022-blake3-aes-256-gcm:password-with-colon:server-salt"
+    ).decode("ascii").rstrip("=")
+    uri = f"ss://{auth}@ss-query.example.com:50100?type=tcp#SS-query"
+    result = _import(client, auth_headers, uri, note="供应商 A / 专线")
+    assert result.status_code == 200
+    assert result.json()["success"] == 1
+    assert result.json()["failed"] == 0
+
+    nodes = client.get(
+        "/api/nodes?node_type=shadowsocks&keyword=ss-query.example.com",
+        headers=auth_headers,
+    ).json()
+    node = nodes["items"][0]
+    assert node["network"] == "tcp"
+    assert node["note"] == "供应商 A / 专线"
+
+    detail = client.get(f"/api/nodes/{node['id']}", headers=auth_headers)
+    assert detail.status_code == 200
+    assert detail.json()["password"] == "password-with-colon:server-salt"
+    exported = client.get(f"/api/nodes/{node['id']}/export", headers=auth_headers)
+    assert exported.status_code == 200
+    assert "?type=tcp#SS-query" in exported.json()["content"]
 
 
 def test_import_trojan(client: TestClient, auth_headers: dict) -> None:

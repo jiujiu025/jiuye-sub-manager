@@ -22,3 +22,10 @@ class SystemSettingRepository:
         else:
             setting.value = value
         return setting
+
+    def delete(self, key: str) -> None:
+        """删除一个运行时设置，用于清除外部通知凭证。"""
+
+        setting = self.get(key)
+        if setting is not None:
+            self.db.delete(setting)

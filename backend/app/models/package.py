@@ -8,6 +8,7 @@ from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Tex
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, utcnow
+from app.models.customer import Customer
 
 
 class Package(Base):
@@ -23,6 +24,9 @@ class Package(Base):
     )
     owner_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    owner_customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True
     )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -44,6 +48,9 @@ class Package(Base):
         cascade="all, delete-orphan",
     )
     owner: Mapped["User | None"] = relationship()
+    owner_customer: Mapped["Customer | None"] = relationship(
+        foreign_keys=[owner_customer_id]
+    )
 
 
 class PackageRule(Base):

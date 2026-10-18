@@ -12,6 +12,7 @@
         <el-tab-pane label="同步日志" name="sync" />
         <el-tab-pane label="订阅请求" name="subscription" />
         <el-tab-pane label="管理员操作" name="admin" />
+        <el-tab-pane label="3x-ui API" name="three_xui" />
         <el-tab-pane label="系统日志" name="system" />
         <el-tab-pane label="错误日志" name="error" />
       </el-tabs>
@@ -51,6 +52,20 @@
       <el-table-column prop="action" label="操作" min-width="150" />
       <el-table-column prop="target_type" label="对象类型" width="110" />
       <el-table-column prop="target_value" label="对象" min-width="140" show-overflow-tooltip />
+      <el-table-column label="时间" width="170">
+        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+      </el-table-column>
+      </el-table>
+
+    <el-table v-else-if="kind === 'three_xui'" :data="rows" v-loading="loading">
+      <el-table-column prop="id" label="ID" width="70" />
+      <el-table-column label="阶段" width="150">
+        <template #default="{ row }">{{ apiStage(row.detail) }}</template>
+      </el-table-column>
+      <el-table-column prop="target_value" label="服务器" min-width="150" show-overflow-tooltip />
+      <el-table-column label="调用详情" min-width="360" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.detail || '-' }}</template>
+      </el-table-column>
       <el-table-column label="时间" width="170">
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </el-table-column>
@@ -111,6 +126,11 @@ async function load() {
 
 function formatTime(value) {
   return value ? new Date(value).toLocaleString() : '-'
+}
+
+function apiStage(detail) {
+  if (!detail) return '-'
+  try { return JSON.parse(detail).stage || '-' } catch { return '-' }
 }
 
 onMounted(load)

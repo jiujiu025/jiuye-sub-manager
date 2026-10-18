@@ -136,11 +136,73 @@ def test_regenerate_token_invalidates_old_hash(
         db.close()
 
 
+def test_duplicate_package_creates_disabled_isolated_copy(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """复制套餐应复制规则但生成独立 Token，且默认停用。"""
+
+    created = client.post(
+        "/api/packages",
+        json={
+            "name": "复制接口源套餐",
+            "rules": {
+                "source_filter": ["复制接口来源"],
+                "country_filter": ["香港"],
+            },
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    source = created.json()
+
+    duplicated = client.post(
+        f"/api/packages/{source['id']}/duplicate",
+        json={"name": "复制接口目标套餐"},
+        headers=auth_headers,
+    )
+    assert duplicated.status_code == 201
+    result = duplicated.json()
+    assert result["id"] != source["id"]
+    assert result["token"] != source["token"]
+    assert result["enabled"] is False
+    assert result["owner_user_id"] is None
+    assert result["expires_at"] is None
+    assert result["rules"] == source["rules"]
+    assert result["token"] not in client.get(
+        "/api/packages", headers=auth_headers
+    ).text
+
+    duplicate_id = result["id"]
+    changed = client.put(
+        f"/api/packages/{duplicate_id}",
+        json={"rules": {"country_filter": ["日本"]}},
+        headers=auth_headers,
+    )
+    assert changed.status_code == 200
+    original = client.get(
+        f"/api/packages/{source['id']}", headers=auth_headers
+    )
+    assert original.status_code == 200
+    assert original.json()["rules"]["country_filter"] == ["香港"]
+
+
 def test_token_audit_and_name_can_be_managed(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     """Token 应暴露脱敏审计信息，并支持修改后台显示名称。"""
 
+    node = client.post(
+        "/api/nodes",
+        json={
+            "name": "Token 审计测试节点",
+            "type": "vless",
+            "server": "198.51.100.220",
+            "port": 443,
+            "uuid": "00000000-0000-4000-8000-000000000220",
+        },
+        headers=auth_headers,
+    )
+    assert node.status_code == 201
     created = client.post(
         "/api/packages",
         json={"name": "Token 审计套餐", "token_name": "手机主订阅"},
@@ -218,6 +280,49 @@ def test_package_preview_api(
     assert len(preview) == 1
     assert preview[0]["name"] == "HK01"
     assert preview[0]["country"] == "香港"
+
+
+def test_package_customer_owner_and_usage_summary(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """套餐应展示业务归属客户以及实际开通该套餐的客户。"""
+
+    owner = client.post(
+        "/api/customers", json={"name": "归属客户"}, headers=auth_headers
+    )
+    assert owner.status_code == 201
+    owner_id = owner.json()["id"]
+    another = client.post(
+        "/api/customers", json={"name": "实际客户"}, headers=auth_headers
+    )
+    assert another.status_code == 201
+    package = client.post(
+        "/api/packages",
+        json={"name": "客户关系套餐", "owner_customer_id": owner_id},
+        headers=auth_headers,
+    )
+    assert package.status_code == 201
+    package_id = package.json()["id"]
+    assert package.json()["owner_customer_id"] == owner_id
+    assert package.json()["owner_customer_name"] == "归属客户"
+
+    subscription = client.post(
+        "/api/subscriptions",
+        json={"customer_id": another.json()["id"], "package_id": package_id},
+        headers=auth_headers,
+    )
+    assert subscription.status_code == 201
+    listed = client.get("/api/packages", headers=auth_headers)
+    row = next(item for item in listed.json() if item["id"] == package_id)
+    assert row["used_by_customers"] == [
+        {
+            "customer_id": another.json()["id"],
+            "customer_name": "实际客户",
+            "manager_username": None,
+            "subscription_count": 1,
+            "active_subscription_count": 1,
+        }
+    ]
 
 
 def test_create_package_empty_name_rejected(

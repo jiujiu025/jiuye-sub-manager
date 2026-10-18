@@ -44,6 +44,7 @@
           登录
         </el-button>
       </el-form>
+      <button class="manager-entry" type="button" @click="router.push('/manager-login')">经理入口</button>
       </el-card>
     </div>
   </div>
@@ -67,7 +68,7 @@ async function submit() {
   loading.value = true
   try {
     await authStore.login(username.value, password.value)
-    router.push(authStore.role === 'user' ? '/my-subscriptions' : '/')
+    router.push(authStore.role === 'admin' ? '/' : authStore.role === 'manager' ? '/manager' : '/my-subscriptions')
   } finally {
     loading.value = false
   }
@@ -187,6 +188,8 @@ async function submit() {
   width: 100%;
   height: 42px;
 }
+
+.manager-entry { display: block; margin: 16px auto 0; border: 0; background: transparent; color: var(--app-primary); cursor: pointer; font-size: 13px; }
 
 @keyframes login-enter {
   from { opacity: 0; transform: translateY(10px); }

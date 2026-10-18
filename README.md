@@ -53,7 +53,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
-# 编辑 .env：设置 JWT_SECRET_KEY 和 ADMIN_PASSWORD
+# 编辑 .env：设置 JWT_SECRET_KEY、ENCRYPTION_KEY 和 ADMIN_PASSWORD
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
@@ -76,7 +76,7 @@ npm.cmd run dev
 git clone <your-repo-url>
 cd sub项目
 cp .env.example .env
-nano .env   # 修改 JWT_SECRET_KEY、ADMIN_PASSWORD、PUBLIC_BASE_URL
+nano .env   # 修改 JWT_SECRET_KEY、ENCRYPTION_KEY、ADMIN_PASSWORD、PUBLIC_BASE_URL
 docker compose up -d --build
 ```
 
@@ -95,21 +95,29 @@ docker compose up -d --build
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///./data/sub_manager.db` | 数据库连接 |
 | `JWT_SECRET_KEY` | 随机生成（仅本地） | 生产必须配置固定密钥 |
+| `ENCRYPTION_KEY` | 兼容使用 JWT_SECRET_KEY | 建议生产配置固定独立密钥；用于 3x-ui API Token 等敏感数据 |
 | `JWT_EXPIRE_MINUTES` | `720` | 后台会话有效期 |
 | `ADMIN_USERNAME` | `admin` | 首次启动创建的管理员 |
 | `ADMIN_PASSWORD` | 随机生成（仅首次） | 生产必须配置强密码 |
 | `SYNC_INTERVAL_MINUTES` | `5` | 自动同步周期 |
 | `SYNC_ENABLED` | `true` | 是否启动定时同步 |
+| `SCHEDULER_ENABLED` | `true` | 是否启动后台定时任务；测试环境可关闭 |
 | `CACHE_TTL_SECONDS` | `300` | 订阅缓存 TTL |
 | `HTTP_TIMEOUT_SECONDS` | `15` | 上游拉取超时 |
 | `PUBLIC_BASE_URL` | `http://localhost:8000` | 订阅 URL 展示基础地址 |
+| `GEOIP_ENABLED` | `true` | 是否后台补全缺失地区 |
+| `GEOIP_API_URL` | `https://ipwho.is/{ip}` | IP 地理接口，必须保留 `{ip}` 占位符，可替换为兼容 JSON 的自建服务 |
+| `GEOIP_TIMEOUT_SECONDS` | `4` | 单次地区请求超时 |
+| `GEOIP_CACHE_TTL_HOURS` | `168` | 成功地区结果缓存时间 |
+| `GEOIP_INTERVAL_MINUTES` | `10` | 后台地区补全周期 |
 
 ## 已记录的默认行为
 
 - 同步失败、返回 HTML、空订阅：保留旧节点，只更新失败状态和日志
 - `allow_empty_override=true` 时才允许空订阅覆盖旧节点
 - 去重优先级：自有节点最高，其余来源按 `dedup_source_priority` 或创建顺序
-- 国家识别基于节点名称关键词，后续可扩展 GeoIP
+- 地区识别优先使用管理员输入和节点名称；名称无法识别时，后台解析公网 IP 并通过 GeoIP 接口补全，结果按 IP 缓存
+- 资源池可手动点击“识别空白地区”；私网、保留地址和无法解析的域名不会发送到第三方接口
 - 订阅 Token 仅在创建/重生成时显示一次，数据库只保存哈希
 - 套餐到期后服务端不再返回真实节点；已支持响应头的客户端会按 3600 秒建议间隔刷新
 - 生产环境日志会过滤 UUID、密码、完整 VLESS URL、上游 URL、Token

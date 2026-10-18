@@ -23,6 +23,7 @@ client.interceptors.response.use(
       localStorage.removeItem('admin_username')
       window.location.href = '/login'
     }
+    if (error.config?.silent) return Promise.reject(error)
     const data = error.response?.data
     if (status === 422 && data?.errors?.length) {
       const first = data.errors[0]

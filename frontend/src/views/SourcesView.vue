@@ -39,7 +39,7 @@
     </div>
 
     <div class="surface-card">
-      <el-table :data="displayedSources" v-loading="loading">
+      <el-table :data="displayedSources" v-loading="loading" :row-class-name="tableRowClassName">
         <el-table-column prop="name" label="名称" min-width="140">
           <template #default="{ row }">
             <span class="node-name">{{ row.name }}</span>
@@ -140,8 +140,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute } from 'vue-router'
 import {
   createSource,
   deleteSource,
@@ -170,6 +171,7 @@ const form = reactive({
   enabled: true,
   allow_empty_override: false
 })
+const route = useRoute()
 
 const formRules = {
   name: [{ required: true, message: '请填写订阅名称', trigger: 'blur' }],
@@ -190,9 +192,15 @@ async function load() {
   try {
     const { data } = await listSources({ keyword: filters.keyword || undefined })
     sources.value = data.items
+    await nextTick()
+    document.querySelector('.notification-focus')?.scrollIntoView({ block: 'center' })
   } finally {
     loading.value = false
   }
+}
+
+function tableRowClassName({ row }) {
+  return String(row.id) === String(route.query.focus || '') ? 'notification-focus' : ''
 }
 
 function openCreate() {
@@ -284,15 +292,19 @@ async function copyUrl(row) {
 }
 
 async function remove(row) {
-  await ElMessageBox.confirm(
-    `删除「${row.name}」后，相关配置将无法继续获取该订阅的数据。`,
-    '删除订阅？',
-    {
-      type: 'warning',
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消'
-    }
-  )
+  try {
+    await ElMessageBox.confirm(
+      `删除「${row.name}」后，相关配置将无法继续获取该订阅的数据。`,
+      '删除订阅？',
+      {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch {
+    return
+  }
   await deleteSource(row.id)
   ElMessage.success('已删除')
   await load()

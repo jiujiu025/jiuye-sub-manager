@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
+from app.models.base import utcnow
 from app.models.node import Node
 from app.models.user import User
 from app.parsers import parse_content
@@ -16,6 +17,7 @@ from app.repositories.node_repo import NodeRepository
 from app.repositories.source_repo import SourceRepository
 from app.schemas.node import ImportFailure, NodeImportResult
 from app.utils.fingerprint import fingerprint_for_parsed
+from app.utils.node_code import allocate_node_code
 from app.utils.priority import SELF_SOURCE_NAME
 
 _FORCED_URI_FORMATS = (
@@ -33,9 +35,14 @@ _FORCED_URI_FORMATS = (
 
 
 def _to_custom_node(
-    parsed: ParsedNode, source_subtype: str, fingerprint: str
+    parsed: ParsedNode,
+    source_subtype: str,
+    fingerprint: str,
+    node_code: str,
+    note: str | None = None,
 ) -> Node:
     return Node(
+        node_code=node_code,
         source_id=None,
         source_name=SELF_SOURCE_NAME,
         original_name=parsed.original_name,
@@ -59,8 +66,11 @@ def _to_custom_node(
         country=parsed.country,
         source_type="custom",
         source_subtype=source_subtype,
+        node_category="external",
         node_fingerprint=fingerprint,
         metadata_json=parsed.metadata or None,
+        note=note,
+        last_seen_at=utcnow(),
     )
 
 
@@ -77,9 +87,11 @@ class NodeImportService:
         source_subtype: str,
         fmt: str,
         admin: User,
+        note: str | None = None,
     ) -> NodeImportResult:
-        """导入节点内容；单个节点失败不影响其他节点。"""
+        """导入外部节点内容；单个节点失败不影响其他节点。"""
 
+        import_note = note.strip() if note and note.strip() else None
         entries, failures = self._parse_entries(content, fmt)
         seen: set[str] = set()
         success = 0
@@ -102,7 +114,15 @@ class NodeImportService:
                         owner.node_count = max(0, owner.node_count - 1)
                 self.node_repo.delete(existing)
             seen.add(fingerprint)
-            self.db.add(_to_custom_node(parsed, source_subtype, fingerprint))
+            self.db.add(
+                _to_custom_node(
+                    parsed,
+                    source_subtype,
+                    fingerprint,
+                    allocate_node_code(self.db),
+                    import_note,
+                )
+            )
             success += 1
 
         self.log_repo.create_admin_log(

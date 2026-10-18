@@ -36,7 +36,7 @@ def login(
     key = stable_rate_key(
         "user-login", request_client_ip(request), payload.username.strip().lower()
     )
-    decision = rate_limiter.check(
+    decision = rate_limiter.reserve(
         key, settings.login_rate_limit, settings.login_rate_window_seconds
     )
     if not decision.allowed:
@@ -48,11 +48,10 @@ def login(
     try:
         result = AuthService(db).login(payload.username, payload.password)
     except HTTPException as exc:
-        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
-            rate_limiter.hit(
-                key, settings.login_rate_limit, settings.login_rate_window_seconds
-            )
+        if exc.status_code != status.HTTP_401_UNAUTHORIZED:
+            rate_limiter.release(decision.reservation_id)
         raise
+    # 成功登录后清除同一账号/IP 的历史失败记录。
     rate_limiter.clear(key)
     return result
 

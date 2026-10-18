@@ -6,7 +6,8 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.cache import cache_service
 from app.core.config import get_settings
@@ -20,16 +21,24 @@ from app.core.security import (
 )
 from app.models.base import utcnow
 from app.models.package import Package, PackageRule
+from app.models.customer import Customer
+from app.models.node import Node
+from app.models.subscription import CustomerSubscription
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
 from app.repositories.package_repo import PackageRepository
 from app.repositories.user_repo import UserRepository
+from app.services.notification_writer import create_admin_notifications
+from app.services.manager_scope import effective_manager_id
+from app.services.subscription_state import is_effectively_active
 from app.schemas.package import (
     PackageCreate,
+    PackageDuplicateRequest,
     PackageDetail,
     PackageRulesPayload,
     PackageUpdate,
+    PackageCustomerUsage,
     PreviewNode,
 )
 from app.utils.node_rules import (
@@ -96,6 +105,7 @@ class PackageService:
         if self.repo.get_by_name(payload.name) is not None:
             raise BusinessError("套餐名称已存在")
         self._validate_owner(payload.owner_user_id)
+        self._validate_owner_customer(payload.owner_customer_id)
         token = generate_subscription_token()
         package = self.repo.create(
             name=payload.name,
@@ -109,6 +119,7 @@ class PackageService:
             token_prefix=token_prefix(token),
             token_encrypted=encrypt_secret(token),
             owner_user_id=payload.owner_user_id,
+            owner_customer_id=payload.owner_customer_id,
             token_name=normalize_token_name(payload.token_name) or payload.name,
         )
         package.token_created_at = utcnow()
@@ -139,6 +150,8 @@ class PackageService:
                 raise BusinessError("套餐名称已存在")
         if "owner_user_id" in data:
             self._validate_owner(data["owner_user_id"])
+        if "owner_customer_id" in data:
+            self._validate_owner_customer(data["owner_customer_id"])
         for key, value in data.items():
             if key == "subscription_name":
                 setattr(package, key, normalize_subscription_name(value))
@@ -163,7 +176,69 @@ class PackageService:
         cache_service.invalidate_all()
         return package
 
+    def duplicate(
+        self,
+        package: Package,
+        payload: PackageDuplicateRequest,
+        admin: User,
+    ) -> tuple[Package, str]:
+        """复制套餐规则并创建全新的、默认停用的 Token。"""
+
+        if self.repo.get_by_name(payload.name) is not None:
+            raise BusinessError("套餐名称已存在")
+
+        token = generate_subscription_token()
+        duplicate = self.repo.create(
+            name=payload.name,
+            subscription_name=(
+                normalize_subscription_name(payload.subscription_name)
+                or payload.name
+            ),
+            enabled=payload.enabled,
+            description=payload.description,
+            expires_at=normalize_expiration(payload.expires_at),
+            token_hash=hash_subscription_token(token),
+            token_prefix=token_prefix(token),
+            token_encrypted=encrypt_secret(token),
+            owner_user_id=None,
+            owner_customer_id=None,
+            token_name=payload.name,
+        )
+        duplicate.token_created_at = utcnow()
+
+        source_rules = package.rules
+        rules_payload = PackageRulesPayload.model_validate(
+            {
+                "source_filter": (source_rules.source_filter or []) if source_rules else [],
+                "node_ids": (source_rules.node_ids or []) if source_rules else [],
+                "country_filter": (source_rules.country_filter or []) if source_rules else [],
+                "type_filter": (source_rules.type_filter or []) if source_rules else [],
+                "include_keywords": (source_rules.include_keywords or []) if source_rules else [],
+                "exclude_keywords": (source_rules.exclude_keywords or []) if source_rules else [],
+                "rename_rules": (source_rules.rename_rules or []) if source_rules else [],
+                "sort_rules": (source_rules.sort_rules or []) if source_rules else [],
+            }
+        )
+        self.db.add(self._build_rule(duplicate, rules_payload))
+        self.log_repo.create_admin_log(
+            admin_user_id=admin.id,
+            action="duplicate_package",
+            target_type="package",
+            target_value=f"{package.name} -> {duplicate.name}",
+        )
+        self.db.commit()
+        self.db.refresh(duplicate)
+        cache_service.invalidate_all()
+        return duplicate, token
+
     def delete(self, package: Package, admin: User) -> None:
+        linked_subscription = self.db.scalar(
+            select(CustomerSubscription.id)
+            .where(CustomerSubscription.package_id == package.id)
+            .limit(1)
+        )
+        if linked_subscription is not None:
+            raise BusinessError("套餐已有客户订阅，不能删除；请先停用套餐或处理客户订阅")
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
             action="delete_package",
@@ -193,6 +268,15 @@ class PackageService:
             target_type="package",
             target_value=package.name,
         )
+        create_admin_notifications(
+            self.db,
+            kind="token",
+            title="套餐 Token 已更换",
+            content=f"套餐「{package.name}」的订阅 Token 已重新生成，旧地址已失效。",
+            dedupe_key=f"package-token-rotation:{package.id}:{package.token_created_at.isoformat()}",
+            target_type="package",
+            target_id=package.id,
+        )
         self.db.commit()
         cache_service.invalidate_all()
         return token
@@ -209,6 +293,16 @@ class PackageService:
             action="revoke_token",
             target_type="package",
             target_value=package.name,
+        )
+        create_admin_notifications(
+            self.db,
+            kind="token",
+            title="套餐 Token 已撤销",
+            content=f"套餐「{package.name}」的订阅 Token 已撤销，订阅地址立即失效。",
+            dedupe_key=f"package-token-revoke:{package.id}:{package.token_revoked_at.isoformat()}",
+            priority="high",
+            target_type="package",
+            target_id=package.id,
         )
         self.db.commit()
         cache_service.invalidate_all()
@@ -248,22 +342,58 @@ class PackageService:
     def preview(self, package: Package) -> list[PreviewNode]:
         """动态应用套餐规则，返回筛选/重命名/排序后的节点。"""
 
-        rules = package.rules
-        source_filter = rules.source_filter if rules else None
-        node_ids = rules.node_ids if rules else None
-        country_filter = rules.country_filter if rules else None
-        type_filter = rules.type_filter if rules else None
-        include_keywords = rules.include_keywords if rules else None
-        exclude_keywords = rules.exclude_keywords if rules else None
-
         nodes = self.node_repo.list_enabled_with_filters(
-            sources=source_filter or None,
-            node_ids=node_ids or None,
-            countries=country_filter or None,
-            types=type_filter or None,
-            include_keywords=include_keywords or None,
-            exclude_keywords=exclude_keywords or None,
+            sources=(package.rules.source_filter or []) if package.rules else None,
+            node_ids=(package.rules.node_ids or []) if package.rules else None,
+            countries=(package.rules.country_filter or []) if package.rules else None,
+            types=(package.rules.type_filter or []) if package.rules else None,
+            include_keywords=(package.rules.include_keywords or []) if package.rules else None,
+            exclude_keywords=(package.rules.exclude_keywords or []) if package.rules else None,
         )
+        return self.preview_from_nodes(package, nodes)
+
+    @staticmethod
+    def preview_from_nodes(package: Package, nodes: list[Node]) -> list[PreviewNode]:
+        """在已有节点集合上应用套餐规则，供批量线路查询复用。"""
+
+        rules = package.rules
+        source_filter = set(rules.source_filter or []) if rules else set()
+        node_ids = {
+            int(value)
+            for value in (rules.node_ids or [] if rules else [])
+            if isinstance(value, int) or str(value).isdigit()
+        }
+        country_filter = set(rules.country_filter or []) if rules else set()
+        type_filter = set(rules.type_filter or []) if rules else set()
+        include_keywords = [
+            str(value).strip().lower()
+            for value in (rules.include_keywords or [] if rules else [])
+            if str(value).strip()
+        ]
+        exclude_keywords = [
+            str(value).strip().lower()
+            for value in (rules.exclude_keywords or [] if rules else [])
+            if str(value).strip()
+        ]
+
+        filtered = []
+        for node in nodes:
+            # source_filter 和 node_ids 是“任一匹配”，与 NodeRepository 保持一致。
+            if (source_filter or node_ids) and not (
+                node.source_name in source_filter or node.id in node_ids
+            ):
+                continue
+            if country_filter and node.country not in country_filter:
+                continue
+            if type_filter and node.type not in type_filter:
+                continue
+            lowered_name = node.name.lower()
+            if include_keywords and not any(keyword in lowered_name for keyword in include_keywords):
+                continue
+            if exclude_keywords and any(keyword in lowered_name for keyword in exclude_keywords):
+                continue
+            filtered.append(node)
+
         previews = [
             PreviewNode(
                 id=node.id,
@@ -275,7 +405,7 @@ class PackageService:
                 port=node.port,
                 country=node.country,
             )
-            for node in nodes
+            for node in filtered
         ]
         rename_rules = rules.rename_rules if rules else []
         for preview in previews:
@@ -284,7 +414,29 @@ class PackageService:
         apply_numbering(previews, rename_rules or [])
         return previews
 
-    def to_detail(self, package: Package) -> PackageDetail:
+    def to_details(
+        self, packages: list[Package], viewer_manager_id: int | None = None
+    ) -> list[PackageDetail]:
+        """批量转换套餐详情，避免套餐列表逐条查询客户使用关系。"""
+
+        usage = self._customer_usage(
+            [package.id for package in packages], viewer_manager_id
+        )
+        return [
+            self.to_detail(
+                package,
+                usage.get(package.id, []),
+                viewer_manager_id=viewer_manager_id,
+            )
+            for package in packages
+        ]
+
+    def to_detail(
+        self,
+        package: Package,
+        used_by_customers: list[PackageCustomerUsage] | None = None,
+        viewer_manager_id: int | None = None,
+    ) -> PackageDetail:
         """把套餐与规则 ORM 转换为 API 响应。"""
 
         rules = package.rules
@@ -304,6 +456,29 @@ class PackageService:
             subscription_url=None,
             owner_user_id=package.owner_user_id,
             owner_username=package.owner.username if package.owner else None,
+            owner_customer_id=(
+                package.owner_customer_id
+                if viewer_manager_id is None
+                or package.owner_customer is None
+                or package.owner_customer.manager_user_id == viewer_manager_id
+                else None
+            ),
+            owner_customer_name=(
+                package.owner_customer.name
+                if package.owner_customer is not None
+                and (
+                    viewer_manager_id is None
+                    or package.owner_customer.manager_user_id == viewer_manager_id
+                )
+                else None
+            ),
+            used_by_customers=(
+                used_by_customers
+                if used_by_customers is not None
+                else self._customer_usage([package.id], viewer_manager_id).get(
+                    package.id, []
+                )
+            ),
             expires_at=expiration_for_response(package.expires_at),
             created_at=package.created_at,
             updated_at=package.updated_at,
@@ -335,6 +510,56 @@ class PackageService:
             raise BusinessError("归属用户不存在或不是普通用户")
         if not owner.is_active:
             raise BusinessError("不能把套餐分配给已禁用用户")
+
+    def _validate_owner_customer(self, customer_id: int | None) -> None:
+        """确保套餐业务归属只指向仍可用的客户档案。"""
+
+        if customer_id is None:
+            return
+        customer = self.db.get(Customer, customer_id)
+        if customer is None or not customer.is_active:
+            raise BusinessError("归属客户不存在或已停用")
+
+    def _customer_usage(
+        self, package_ids: list[int], viewer_manager_id: int | None = None
+    ) -> dict[int, list[PackageCustomerUsage]]:
+        if not package_ids:
+            return {}
+        rows = self.db.scalars(
+            select(CustomerSubscription)
+            .options(
+                joinedload(CustomerSubscription.customer).joinedload(Customer.manager),
+                joinedload(CustomerSubscription.manager),
+            )
+            .where(CustomerSubscription.package_id.in_(package_ids))
+        ).all()
+        grouped: dict[int, dict[int, PackageCustomerUsage]] = {}
+        for row in rows:
+            customer = row.customer
+            if viewer_manager_id is not None and effective_manager_id(row) != viewer_manager_id:
+                continue
+            per_package = grouped.setdefault(row.package_id, {})
+            usage = per_package.get(customer.id)
+            if usage is None:
+                usage = PackageCustomerUsage(
+                    customer_id=customer.id,
+                    customer_name=customer.name,
+                    manager_username=(
+                        row.manager.username
+                        if row.manager is not None
+                        else customer.manager.username
+                        if customer.manager is not None
+                        else None
+                    ),
+                )
+                per_package[customer.id] = usage
+            usage.subscription_count += 1
+            if is_effectively_active(row):
+                usage.active_subscription_count += 1
+        return {
+            package_id: sorted(items.values(), key=lambda item: (item.customer_name, item.customer_id))
+            for package_id, items in grouped.items()
+        }
 
     @staticmethod
     def _build_rule(package: Package, payload: PackageRulesPayload) -> PackageRule:

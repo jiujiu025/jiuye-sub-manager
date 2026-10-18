@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { loginUser as loginUserApi } from '../api'
+import { loginManager as loginManagerApi, loginUser as loginUserApi } from '../api'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -8,8 +8,9 @@ export const useAuthStore = defineStore('auth', {
     role: localStorage.getItem('admin_role') || ''
   }),
   actions: {
-    async login(username, password) {
-      const { data } = await loginUserApi({ username, password })
+    async login(username, password, portal = 'user') {
+      const loginApi = portal === 'manager' ? loginManagerApi : loginUserApi
+      const { data } = await loginApi({ username, password })
       this.token = data.access_token
       this.username = username
       this.role = data.role

@@ -95,13 +95,25 @@ class LogRepository:
         return list(rows), total
 
     def list_admin_logs(
-        self, page: int = 1, page_size: int = 50
+        self, page: int = 1, page_size: int = 50, action: str | None = None
     ) -> tuple[list[AdminLog], int]:
-        base = select(AdminLog).order_by(
+        query = select(AdminLog)
+        count_query = select(func.count()).select_from(AdminLog)
+        if action:
+            query = query.where(AdminLog.action == action)
+            count_query = count_query.where(AdminLog.action == action)
+        base = query.order_by(
             AdminLog.created_at.desc(), AdminLog.id.desc()
         )
-        total = self.db.scalar(select(func.count()).select_from(AdminLog)) or 0
+        total = self.db.scalar(count_query) or 0
         rows = self.db.scalars(
             base.offset((page - 1) * page_size).limit(page_size)
         ).all()
         return list(rows), total
+
+    def list_three_xui_logs(
+        self, page: int = 1, page_size: int = 50
+    ) -> tuple[list[AdminLog], int]:
+        """只查询 3x-ui API 调用审计日志。"""
+
+        return self.list_admin_logs(page, page_size, action="three_xui_api_request")

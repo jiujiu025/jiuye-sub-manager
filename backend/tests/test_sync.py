@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.cache import cache_service
 from app.db import SessionLocal
 from app.models.log import SyncLog
+from app.models.node import Node
 from app.models.source import Source
 from app.repositories.node_repo import NodeRepository
 from app.services.sync_service import SyncService
@@ -546,6 +547,67 @@ def test_successful_sync_invalidates_related_cache_only(db_session) -> None:
 
     assert SubscriptionService.get_cached_entry(related) is None
     assert SubscriptionService.get_cached_entry(unrelated) == unrelated_cache
+
+
+def test_sync_remaps_package_direct_node_ids_by_stable_identity(db_session) -> None:
+    """来源节点重建后，套餐直接选择应跟随稳定身份更新。"""
+
+    source = _create_source(db_session, "airport_direct_selection")
+    first_content = (
+        "vless://stable-uuid@old.example.com:443?security=reality#stable\n"
+        "vless://removed-uuid@removed.example.com:443?security=reality#removed"
+    )
+    assert SyncService(
+        db_session, http_client=_client_with(first_content)
+    ).sync_source(source).status == "success"
+    old_nodes = NodeRepository(db_session).list_by_source(source.id)
+    stable_node = next(node for node in old_nodes if node.uuid == "stable-uuid")
+    removed_node = next(node for node in old_nodes if node.uuid == "removed-uuid")
+
+    package = Package(
+        name="来源直接节点引用套餐",
+        token_hash="e" * 64,
+        token_prefix="direct",
+    )
+    db_session.add(package)
+    db_session.flush()
+    db_session.add(
+        PackageRule(
+            package_id=package.id,
+            node_ids=[stable_node.id, removed_node.id],
+        )
+    )
+    db_session.commit()
+
+    first_manual_node = Node(
+        source_id=None,
+        source_name="manual",
+        original_name="占位节点",
+        name="占位节点",
+        type="vless",
+        server="manual.example.com",
+        port=443,
+        uuid="manual-uuid",
+        node_fingerprint="manual-fingerprint",
+    )
+    db_session.add(first_manual_node)
+    db_session.commit()
+
+    second_content = "vless://stable-uuid@new.example.com:443?security=reality#stable"
+    assert SyncService(
+        db_session, http_client=_client_with(second_content)
+    ).sync_source(source).status == "success"
+
+    new_stable = next(
+        node
+        for node in NodeRepository(db_session).list_by_source(source.id)
+        if node.uuid == "stable-uuid"
+    )
+    rule = db_session.scalar(select(PackageRule).where(PackageRule.package_id == package.id))
+    assert rule is not None
+    assert rule.node_ids == [new_stable.id]
+    assert new_stable.id != stable_node.id
+    assert removed_node.id not in rule.node_ids
 
 
 def test_sync_empty_content_override_clears_nodes(db_session) -> None:

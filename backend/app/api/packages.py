@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_admin
+from app.api.deps import get_current_admin, get_current_admin_or_manager
 from app.db import get_db
 from app.models.user import User
 from app.repositories.package_repo import PackageRepository
@@ -13,6 +13,7 @@ from app.schemas.package import (
     PackageCreate,
     PackageCreateResponse,
     PackageDetail,
+    PackageDuplicateRequest,
     PackageSubscriptionUrlResponse,
     PackageTokenResponse,
     PackageTokenUpdate,
@@ -41,13 +42,14 @@ def _subscription_url(token: str) -> str:
 @router.get("", response_model=list[PackageDetail])
 def list_packages(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin_or_manager),
 ) -> list[PackageDetail]:
     """套餐列表。"""
 
     packages = PackageRepository(db).list()
     service = PackageService(db)
-    return [service.to_detail(package) for package in packages]
+    manager_id = current_user.id if current_user.role == "manager" else None
+    return service.to_details(packages, manager_id)
 
 
 @router.post("", response_model=PackageCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -108,6 +110,30 @@ def update_package(
     service = PackageService(db)
     updated = service.update(package, payload, admin)
     return service.to_detail(updated)
+
+
+@router.post(
+    "/{package_id}/duplicate",
+    response_model=PackageCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def duplicate_package(
+    package_id: int,
+    payload: PackageDuplicateRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> PackageCreateResponse:
+    """复制套餐规则，生成新的独立 Token；副本默认停用。"""
+
+    package = _get_package_or_404(db, package_id)
+    service = PackageService(db)
+    duplicate, token = service.duplicate(package, payload, admin)
+    detail = service.to_detail(duplicate)
+    return PackageCreateResponse(
+        **detail.model_dump(exclude={"subscription_url"}),
+        token=token,
+        subscription_url=_subscription_url(token),
+    )
 
 
 @router.post("/{package_id}/regenerate-token", response_model=PackageTokenResponse)

@@ -104,7 +104,7 @@ class AuthService:
         return user
 
     def create_user(self, payload: UserCreateRequest, admin: User) -> User:
-        """创建普通用户，普通用户不能通过接口创建管理员。"""
+        """创建普通用户或经理，管理员角色不能通过该接口创建。"""
 
         username = payload.username.strip()
         if not username:
@@ -114,10 +114,12 @@ class AuthService:
             )
         if self.user_repo.get_by_username(username) is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
-        user = self.user_repo.create(username, hash_password(payload.password), role="user")
+        user = self.user_repo.create(
+            username, hash_password(payload.password), role=payload.role
+        )
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
-            action="create_user",
+            action="create_manager" if payload.role == "manager" else "create_user",
             target_type="user",
             target_value=username,
         )
@@ -130,8 +132,8 @@ class AuthService:
     ) -> User:
         """更新普通用户，禁止通过用户管理接口修改管理员。"""
 
-        if user.role != "user":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能管理普通用户")
+        if user.role == "admin":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能通过用户管理接口修改管理员")
         data = payload.model_dump(exclude_unset=True)
         if not data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="没有可更新的内容")
@@ -147,6 +149,8 @@ class AuthService:
             user.password_hash = hash_password(data["password"])
         if "is_active" in data and data["is_active"] is not None:
             user.is_active = data["is_active"]
+        if "role" in data and data["role"] is not None:
+            user.role = data["role"]
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
             action="update_user",

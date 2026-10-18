@@ -1,18 +1,51 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import {
+  Aim,
+  ArrowDown,
+  ArrowRight,
+  Bell,
+  Briefcase,
+  Check,
+  Cloudy,
+  Connection,
+  DataAnalysis,
+  DataLine,
+  Document,
+  FolderOpened,
+  Grid,
+  List,
+  Loading,
+  Lock,
+  Menu,
+  Odometer,
+  Operation,
+  Plus,
+  Refresh,
+  Right,
+  Search,
+  Setting,
+  Share,
+  Switch,
+  Tickets,
+  User,
+  UserFilled,
+  WarningFilled
+} from '@element-plus/icons-vue'
 import './styles/theme.css'
 
 import App from './App.vue'
 import router from './router'
 
 const app = createApp(App)
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component)
+const icons = {
+  Aim, ArrowDown, ArrowRight, Bell, Briefcase, Check, Cloudy, Connection,
+  DataAnalysis, DataLine, Document, FolderOpened, Grid, List, Loading, Lock,
+  Menu, Odometer, Operation, Plus, Refresh, Right, Search, Setting, Share,
+  Switch, Tickets, User, UserFilled, WarningFilled
 }
+for (const [key, component] of Object.entries(icons)) app.component(key, component)
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus)
 app.mount('#app')

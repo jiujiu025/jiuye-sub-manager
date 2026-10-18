@@ -47,21 +47,39 @@
       </el-select>
       <span class="filter-hint">客户端支持时每小时自动更新</span>
       <div class="spacer" />
+      <el-radio-group
+        v-model="displayMode"
+        class="package-view-switch"
+        size="small"
+        aria-label="套餐视图"
+        @change="persistDisplayMode"
+      >
+        <el-radio-button label="cards">
+          <el-icon><Grid /></el-icon>
+          卡片
+        </el-radio-button>
+        <el-radio-button label="details">
+          <el-icon><List /></el-icon>
+          详细列表
+        </el-radio-button>
+      </el-radio-group>
     </div>
 
     <div
+      v-if="displayMode === 'cards'"
       v-loading="loading"
       class="package-grid"
     >
       <div
-        v-for="(pkg, index) in filteredPackages"
+        v-for="(pkg, index) in paginatedPackages"
         :key="pkg.id"
         class="package-card"
+        :class="{ 'notification-focus': String(pkg.id) === String(route.query.focus || '') }"
       >
         <div class="package-head">
           <div>
             <div class="package-name">
-              <span class="package-index">#{{ index + 1 }}</span>
+              <span class="package-index">#{{ packageIndex(index) }}</span>
               {{ pkg.name }}
               <el-tag
                 :type="isAvailable(pkg) ? 'success' : 'danger'"
@@ -91,6 +109,10 @@
           <div class="meta-block">
             <div class="meta-label">Token 名称</div>
             <div class="meta-value">{{ pkg.token_name || '未命名' }}</div>
+          </div>
+          <div class="meta-block">
+            <div class="meta-label">业务归属客户</div>
+            <div class="meta-value">{{ pkg.owner_customer_name || '未指定' }}</div>
           </div>
           <div class="meta-block">
             <div class="meta-label">订阅源</div>
@@ -146,6 +168,13 @@
           </div>
         </div>
 
+        <div class="package-usage">
+          <span class="meta-label">实际使用客户</span>
+          <el-button link type="primary" @click="showUsage(pkg)">{{ pkg.used_by_customers?.length || 0 }} 个客户</el-button>
+          <span v-if="pkg.used_by_customers?.length" class="usage-names">{{ pkg.used_by_customers.slice(0, 3).map((item) => item.customer_name).join('、') }}{{ pkg.used_by_customers.length > 3 ? ' 等' : '' }}</span>
+          <span v-else class="usage-empty">尚未开通给客户</span>
+        </div>
+
         <div class="package-actions">
           <el-button size="default" type="primary" plain @click="openEdit(pkg)">
             编辑
@@ -172,6 +201,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="preview">预览节点</el-dropdown-item>
+                <el-dropdown-item command="duplicate">复制套餐</el-dropdown-item>
                 <el-dropdown-item command="regenerate">刷新 Token</el-dropdown-item>
                 <el-dropdown-item command="toggle">
                   {{ pkg.enabled ? '禁用套餐' : '启用套餐' }}
@@ -188,6 +218,109 @@
         <p class="empty-state-desc">创建一个套餐后，可以组合订阅来源并生成独立订阅。</p>
         <el-button type="primary" @click="openCreate">+ 新建套餐</el-button>
       </div>
+    </div>
+
+    <div
+      v-else
+      v-loading="loading"
+      class="package-table-wrap surface-card"
+    >
+      <el-table
+        :data="paginatedPackages"
+        row-key="id"
+        empty-text="暂无符合条件的套餐"
+        :row-class-name="packageRowClassName"
+      >
+        <el-table-column label="#" width="64" align="center">
+          <template #default="{ $index }">
+            <span class="table-index">{{ packageIndex($index) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="套餐" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="package-table-main">
+              <strong>{{ row.name }}</strong>
+              <span>{{ row.subscription_name || '未设置订阅显示名称' }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="归属与使用" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="package-table-main">
+              <strong>{{ row.owner_customer_name || '未指定客户' }}</strong>
+              <span v-if="row.used_by_customers?.length">
+                {{ row.used_by_customers.slice(0, 2).map((item) => item.customer_name).join('、') }}{{ row.used_by_customers.length > 2 ? ' 等' : '' }}
+              </span>
+              <span v-else>尚未开通给客户</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="节点与来源" min-width="160">
+          <template #default="{ row }">
+            <div class="package-table-main">
+              <strong :class="{ 'table-muted': (packageNodeCounts[row.id] ?? 0) === 0 }">
+                {{ packageNodeCounts[row.id] ?? 0 }} 个可用节点
+              </strong>
+              <span>{{ summaryOf(row).sourceCount }} 个订阅源 · {{ (row.rules?.node_ids || []).length }} 个自有节点</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="开通 / 到期" min-width="180">
+          <template #default="{ row }">
+            <div class="package-table-main package-table-dates">
+              <span>开通 {{ formatTime(row.created_at) }}</span>
+              <span>到期 {{ row.expires_at ? formatTime(row.expires_at) : '长期有效' }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="130">
+          <template #default="{ row }">
+            <div class="package-table-status">
+              <el-tag :type="isAvailable(row) ? 'success' : 'danger'" effect="light" size="small">
+                {{ isAvailable(row) ? '可用' : '已停机' }}
+              </el-tag>
+              <span :class="{ 'table-danger': isExpired(row) }">{{ expirationLabel(row) }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="280" fixed="right">
+          <template #default="{ row }">
+            <div class="package-table-actions">
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="primary" @click="copyUrl(row)">复制订阅</el-button>
+              <el-button link type="primary" @click="showQr(row)">二维码</el-button>
+              <el-dropdown trigger="click" @command="(cmd) => handleMore(cmd, row)">
+                <el-button link type="primary">
+                  更多
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="preview">预览节点</el-dropdown-item>
+                    <el-dropdown-item command="duplicate">复制套餐</el-dropdown-item>
+                    <el-dropdown-item command="regenerate">刷新 Token</el-dropdown-item>
+                    <el-dropdown-item command="toggle">{{ row.enabled ? '禁用套餐' : '启用套餐' }}</el-dropdown-item>
+                    <el-dropdown-item command="delete" divided>删除套餐</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="filteredPackages.length" class="package-pagination">
+      <span class="package-pagination-hint">共 {{ filteredPackages.length }} 个套餐</span>
+      <el-pagination
+        v-model:current-page="packagePage"
+        v-model:page-size="packagePageSize"
+        :page-sizes="packagePageSizes"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="filteredPackages.length"
+        background
+        @size-change="persistPackagePageSize"
+      />
     </div>
 
     <el-dialog
@@ -213,8 +346,17 @@
         <el-form-item label="说明">
           <el-input v-model="form.description" placeholder="选填" />
         </el-form-item>
-        <el-form-item label="归属用户">
-          <el-select v-model="form.owner_user_id" clearable placeholder="不指定则仅管理员管理" style="width: 100%">
+        <el-form-item label="业务归属客户">
+          <div class="owner-picker">
+            <el-select v-model="form.owner_customer_id" clearable filterable placeholder="选择客户或暂不指定" style="width: 100%">
+              <el-option v-for="customer in customerOptions" :key="customer.id" :label="`${customer.name}${customer.region ? ` · ${customer.region}` : ''}`" :value="customer.id" />
+            </el-select>
+            <el-button @click="customerDialogVisible = true"><el-icon><Plus /></el-icon>新建客户</el-button>
+          </div>
+          <div class="form-hint">用于标记当前套餐的业务归属；实际开通给多个客户后，会在套餐列表中汇总显示。</div>
+        </el-form-item>
+        <el-form-item label="登录用户归属（兼容）">
+          <el-select v-model="form.owner_user_id" clearable filterable placeholder="不指定则仅管理员管理" style="width: 100%">
             <el-option
               v-for="user in userOptions"
               :key="user.id"
@@ -222,7 +364,7 @@
               :value="user.id"
             />
           </el-select>
-          <div class="form-hint">普通用户登录后只能看到分配给自己的套餐。</div>
+          <div class="form-hint">保留原有普通用户订阅入口；业务客户请使用上面的客户归属。</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
@@ -267,10 +409,10 @@
               </div>
             </div>
             <div class="source-group">
-              <div class="source-group-title">自有节点</div>
+              <div class="source-group-title">导入外部节点</div>
               <el-input
                 v-model="selfNodeSearch"
-                placeholder="搜索节点名称/服务器/国家"
+                placeholder="搜索编号、名称、服务器或备注"
                 clearable
                 style="width: 240px"
               />
@@ -282,13 +424,13 @@
                     :value="node.id"
                     class="self-node-check"
                   >
-                    <span class="node-option-name">{{ node.name }}</span>
+                    <span class="node-option-name">{{ node.node_code || '未编号' }} · {{ node.name }}</span>
                     <span class="node-option-meta">
-                      {{ node.type }} · {{ node.country || '-' }} · {{ node.server }}
+                      {{ node.type }} · {{ node.country || '-' }} · {{ node.server }} · {{ node.note || '无备注' }}
                     </span>
                   </el-checkbox>
                 </el-checkbox-group>
-                <div v-if="!filteredSelfNodes.length" class="form-hint">暂无匹配的自有节点</div>
+                <div v-if="!filteredSelfNodes.length" class="form-hint">暂无匹配的导入外部节点</div>
               </div>
               <div class="source-actions">
                 <el-button size="small" @click="selectAllSelfNodes">全选</el-button>
@@ -471,21 +613,43 @@
         <el-button type="primary" plain @click="copyQrUrl">复制订阅地址</el-button>
       </div>
     </el-dialog>
+
+    <el-dialog v-model="usageVisible" :title="`${usagePackage?.name || ''} · 使用客户`" width="620px" append-to-body>
+      <el-table :data="usagePackage?.used_by_customers || []" empty-text="尚未开通给客户">
+        <el-table-column prop="customer_name" label="客户" min-width="150" />
+        <el-table-column prop="manager_username" label="负责经理" min-width="130"><template #default="{ row }">{{ row.manager_username || '未分配' }}</template></el-table-column>
+        <el-table-column prop="subscription_count" label="订阅次数" width="100" />
+        <el-table-column prop="active_subscription_count" label="生效中" width="90" />
+      </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="customerDialogVisible" title="快速新建客户" width="480px" append-to-body>
+      <el-form label-position="top">
+        <el-form-item label="客户名称" required><el-input v-model="customerForm.name" placeholder="例如：客户 A" /></el-form-item>
+        <div class="form-row"><el-form-item label="地区"><el-input v-model="customerForm.region" placeholder="例如：香港" /></el-form-item><el-form-item label="联系方式"><el-input v-model="customerForm.contact" placeholder="手机号或其他联系方式" /></el-form-item></div>
+        <el-form-item label="备注"><el-input v-model="customerForm.note" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="customerDialogVisible = false">取消</el-button><el-button type="primary" :loading="customerSaving" @click="quickCreateCustomer">创建并归属</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute } from 'vue-router'
 import QRCode from 'qrcode'
 import {
   createPackage,
+  duplicatePackage,
   deletePackage,
   getPackageSubscriptionUrl,
   getPackage,
   listPackages,
   listNodes,
   listSources,
+  listCustomers,
+  createCustomer,
   previewPackage,
   listUsers,
   regenerateToken,
@@ -503,6 +667,7 @@ const packages = ref([])
 const sourceOptions = ref([])
 const sourcesLoaded = ref(false)
 const userOptions = ref([])
+const customerOptions = ref([])
 const packageNodeCounts = ref({})
 const loading = ref(false)
 const saving = ref(false)
@@ -518,11 +683,21 @@ const selfNodeSearch = ref('')
 const searchKeyword = ref('')
 const statusFilter = ref('')
 const sortFilter = ref('')
+const displayMode = ref(window.localStorage.getItem('packages-view-mode') || 'cards')
+const packagePageSizes = [10, 20, 50, 100]
+const savedPackagePageSize = Number(window.localStorage.getItem('packages-page-size'))
+const packagePage = ref(1)
+const packagePageSize = ref(packagePageSizes.includes(savedPackagePageSize) ? savedPackagePageSize : 20)
 const nowTick = ref(Date.now())
 const qrVisible = ref(false)
 const qrDataUrl = ref('')
 const qrUrl = ref('')
 const qrName = ref('')
+const usageVisible = ref(false)
+const usagePackage = ref(null)
+const customerDialogVisible = ref(false)
+const customerSaving = ref(false)
+const customerForm = reactive({ name: '', region: '', contact: '', note: '' })
 const renameForm = reactive({
   prefix: '',
   suffix: '',
@@ -545,6 +720,7 @@ const form = reactive({
   enabled: true,
   expires_at: null,
   owner_user_id: null,
+  owner_customer_id: null,
   rules: {
     source_filter: [],
     node_ids: [],
@@ -554,6 +730,7 @@ const form = reactive({
     exclude_keywords: []
   }
 })
+const route = useRoute()
 
 const filteredPackages = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
@@ -573,13 +750,22 @@ const filteredPackages = computed(() => {
   return result
 })
 
+const paginatedPackages = computed(() => {
+  const start = (packagePage.value - 1) * packagePageSize.value
+  return filteredPackages.value.slice(start, start + packagePageSize.value)
+})
+
+watch([searchKeyword, statusFilter, sortFilter], () => {
+  packagePage.value = 1
+})
+
 const filteredSelfNodes = computed(() => {
   const keyword = selfNodeSearch.value.trim().toLowerCase()
   if (!keyword) {
     return selfNodes.value
   }
   return selfNodes.value.filter((node) => {
-    const text = `${node.name} ${node.server} ${node.country || ''}`.toLowerCase()
+    const text = `${node.node_code || ''} ${node.name} ${node.server} ${node.country || ''} ${node.note || ''}`.toLowerCase()
     return text.includes(keyword)
   })
 })
@@ -684,6 +870,19 @@ async function load() {
     const { data } = await listPackages()
     packages.value = data
     await refreshNodeCounts()
+    const focusId = String(route.query.focus || '')
+    const focusIndex = focusId
+      ? filteredPackages.value.findIndex((pkg) => String(pkg.id) === focusId)
+      : -1
+    if (focusIndex >= 0) {
+      packagePage.value = Math.floor(focusIndex / packagePageSize.value) + 1
+    }
+    const maxPage = Math.max(1, Math.ceil(filteredPackages.value.length / packagePageSize.value))
+    if (packagePage.value > maxPage) {
+      packagePage.value = maxPage
+    }
+    await nextTick()
+    document.querySelector('.notification-focus')?.scrollIntoView({ block: 'center' })
   } finally {
     loading.value = false
   }
@@ -714,6 +913,38 @@ async function loadUsers() {
   userOptions.value = data.filter((user) => user.role === 'user' && user.is_active)
 }
 
+async function loadCustomers() {
+  const { data } = await listCustomers()
+  customerOptions.value = data.filter((customer) => customer.is_active)
+}
+
+function resetCustomerForm() {
+  Object.assign(customerForm, { name: '', region: '', contact: '', note: '' })
+}
+
+async function quickCreateCustomer() {
+  if (!customerForm.name.trim()) {
+    ElMessage.warning('请输入客户名称')
+    return
+  }
+  customerSaving.value = true
+  try {
+    const { data } = await createCustomer({ ...customerForm, name: customerForm.name.trim() })
+    customerOptions.value = [data, ...customerOptions.value]
+    form.owner_customer_id = data.id
+    customerDialogVisible.value = false
+    resetCustomerForm()
+    ElMessage.success('客户已创建并归属到当前套餐')
+  } finally {
+    customerSaving.value = false
+  }
+}
+
+function showUsage(pkg) {
+  usagePackage.value = pkg
+  usageVisible.value = true
+}
+
 async function loadSelfNodes() {
   const { data } = await listNodes({
     source_name: '自有节点',
@@ -742,6 +973,7 @@ function resetForm() {
     enabled: true,
     expires_at: null,
     owner_user_id: null,
+    owner_customer_id: null,
     rules: {
       source_filter: [],
       node_ids: [],
@@ -809,6 +1041,23 @@ function dateTimestamp(value, emptyValue) {
   return Number.isNaN(timestamp) ? emptyValue : timestamp
 }
 
+function persistDisplayMode(value) {
+  window.localStorage.setItem('packages-view-mode', value)
+}
+
+function persistPackagePageSize(value) {
+  packagePage.value = 1
+  window.localStorage.setItem('packages-page-size', String(value))
+}
+
+function packageIndex(index) {
+  return (packagePage.value - 1) * packagePageSize.value + index + 1
+}
+
+function packageRowClassName({ row }) {
+  return String(row.id) === String(route.query.focus || '') ? 'notification-focus' : ''
+}
+
 function expirationLabel(pkg) {
   if (!pkg.expires_at) return '长期有效'
   return isExpired(pkg) ? '已到期' : `有效至 ${formatTime(pkg.expires_at)}`
@@ -817,13 +1066,13 @@ function expirationLabel(pkg) {
 function openCreate() {
   editing.value = null
   resetForm()
-  loadSelfNodes()
+  Promise.all([loadSelfNodes(), loadCustomers(), loadUsers()])
   dialogVisible.value = true
 }
 
 async function openEdit(row) {
   editing.value = row
-  loadSelfNodes()
+  await Promise.all([loadSelfNodes(), loadCustomers(), loadUsers()])
   const { data } = await getPackage(row.id)
   Object.assign(form, {
     name: data.name,
@@ -833,6 +1082,7 @@ async function openEdit(row) {
     enabled: data.enabled,
     expires_at: formatDatePickerValue(data.expires_at),
     owner_user_id: data.owner_user_id,
+    owner_customer_id: data.owner_customer_id,
     rules: {
       source_filter: data.rules.source_filter || [],
       node_ids: data.rules.node_ids || [],
@@ -977,6 +1227,34 @@ async function regenerate(row) {
   await load()
 }
 
+async function duplicate(row) {
+  const defaultName = `${row.name}-副本`
+  let value
+  try {
+    const result = await ElMessageBox.prompt(
+      '复制会创建全新的套餐和 Token，副本默认停用且不会继承原套餐归属。',
+      '复制套餐',
+      {
+        confirmButtonText: '创建副本',
+        cancelButtonText: '取消',
+        inputValue: defaultName,
+        inputPattern: /\S+/,
+        inputErrorMessage: '请输入套餐名称'
+      }
+    )
+    value = result.value
+  } catch {
+    return
+  }
+  const { data } = await duplicatePackage(row.id, { name: value.trim() })
+  await ElMessageBox.alert(
+    `新 Token：${data.token}\n订阅地址：${data.subscription_url}\n\n副本当前已停用，请编辑确认后再启用。`,
+    '套餐副本已创建（Token 仅显示一次）',
+    { confirmButtonText: '我已保存' }
+  )
+  await load()
+}
+
 async function toggle(row) {
   await togglePackage(row.id)
   ElMessage.success(row.enabled ? '已禁用套餐' : '已启用套餐')
@@ -990,15 +1268,19 @@ async function preview(row) {
 }
 
 async function remove(row) {
-  await ElMessageBox.confirm(
-    `删除「${row.name}」后，该订阅地址将立即失效。`,
-    '删除套餐？',
-    {
-      type: 'warning',
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消'
-    }
-  )
+  try {
+    await ElMessageBox.confirm(
+      `删除「${row.name}」后，该订阅地址将立即失效。`,
+      '删除套餐？',
+      {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch {
+    return
+  }
   await deletePackage(row.id)
   ElMessage.success('已删除')
   await load()
@@ -1006,6 +1288,7 @@ async function remove(row) {
 
 async function handleMore(command, row) {
   if (command === 'preview') await preview(row)
+  if (command === 'duplicate') await duplicate(row)
   if (command === 'regenerate') await regenerate(row)
   if (command === 'toggle') await toggle(row)
   if (command === 'delete') await remove(row)
@@ -1041,6 +1324,17 @@ onUnmounted(() => {
   color: var(--app-text-muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.package-view-switch {
+  flex-shrink: 0;
+}
+
+.package-view-switch :deep(.el-radio-button__inner) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
 }
 
 .dialog-subtitle {
@@ -1080,6 +1374,98 @@ onUnmounted(() => {
 .package-card:hover {
   border-color: var(--app-border-strong);
   box-shadow: 0 4px 12px rgba(16, 24, 40, 0.06);
+}
+
+.package-table-wrap {
+  min-height: 200px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.package-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  min-height: 58px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--app-border);
+}
+
+.package-pagination-hint {
+  margin-right: auto;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.package-table-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.package-table-main strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-table-main span {
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-table-dates span {
+  font-variant-numeric: tabular-nums;
+}
+
+.package-table-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.package-table-status > span {
+  max-width: 118px;
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.table-index {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-muted,
+.table-danger {
+  color: var(--app-text-muted) !important;
+  font-weight: 500 !important;
+}
+
+.table-danger {
+  color: var(--el-color-danger) !important;
 }
 
 .package-name {
@@ -1148,6 +1534,12 @@ onUnmounted(() => {
   padding-top: 12px;
   border-top: 1px solid var(--app-border);
 }
+
+.package-usage { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--app-border); }
+.usage-names { color: var(--app-text-secondary); font-size: 12px; }
+.usage-empty { color: var(--app-text-muted); font-size: 12px; }
+.owner-picker { display: flex; align-items: center; gap: 8px; width: 100%; }
+.owner-picker .el-select { flex: 1; }
 
 .package-date-end {
   text-align: right;
@@ -1351,6 +1743,34 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .filter-hint {
     width: 100%;
+  }
+
+  .package-view-switch {
+    width: 100%;
+  }
+
+  .package-view-switch .el-radio-button {
+    flex: 1;
+  }
+
+  .package-view-switch :deep(.el-radio-button__inner) {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .package-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .package-pagination-hint {
+    margin-right: 0;
+  }
+
+  .package-pagination :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .package-meta {

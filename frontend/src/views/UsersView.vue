@@ -2,12 +2,12 @@
   <div class="page">
     <div class="page-header page-toolbar">
       <div>
-        <h2 class="page-title">用户管理</h2>
-        <p class="page-subtitle">创建用户并分配只读订阅权限。</p>
+        <h2 class="page-title">{{ managerOnly ? '客户经理' : '用户管理' }}</h2>
+        <p class="page-subtitle">{{ managerOnly ? '创建、停用与管理销售经理账号。' : '创建用户并分配只读订阅权限。' }}</p>
       </div>
       <div class="page-actions">
         <div class="page-header-mark"><el-icon><User /></el-icon><span>MEMBERS</span></div>
-        <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>创建用户</el-button>
+        <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>{{ managerOnly ? '新建客户经理' : '创建用户' }}</el-button>
       </div>
     </div>
 
@@ -15,7 +15,7 @@
       <el-table :data="users" row-key="id">
         <el-table-column prop="username" label="用户名" min-width="180" />
         <el-table-column prop="role" label="角色" width="100">
-          <template #default="{ row }">{{ row.role === 'admin' ? '管理员' : '用户' }}</template>
+          <template #default="{ row }">{{ roleLabel(row.role) }}</template>
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -24,7 +24,7 @@
         </el-table-column>
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
-            <el-button v-if="row.role === 'user'" link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="row.role !== 'admin'" link type="primary" @click="openEdit(row)">编辑</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -35,6 +35,12 @@
         <el-form-item label="用户名">
           <el-input v-model="form.username" autocomplete="off" />
         </el-form-item>
+        <el-form-item v-if="!editing && !managerOnly" label="角色">
+          <el-select v-model="form.role" style="width: 100%">
+            <el-option label="普通用户" value="user" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-else-if="!editing && managerOnly" label="角色"><el-tag type="success">客户经理</el-tag></el-form-item>
         <el-form-item label="密码">
           <el-input v-model="form.password" type="password" show-password :placeholder="editing ? '留空表示不修改' : '至少 8 位'" />
         </el-form-item>
@@ -50,8 +56,9 @@
   </div>
 </template>
 
-<script setup>
-import { onMounted, reactive, ref } from 'vue'
+  <script setup>
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { createUser, listUsers, updateUser } from '../api'
 
@@ -60,10 +67,12 @@ const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
 const editing = ref(null)
-const form = reactive({ username: '', password: '', is_active: true })
+const form = reactive({ username: '', password: '', is_active: true, role: 'user' })
+const route = useRoute()
+const managerOnly = computed(() => route.path === '/managers')
 
 function resetForm() {
-  Object.assign(form, { username: '', password: '', is_active: true })
+  Object.assign(form, { username: '', password: '', is_active: true, role: managerOnly.value ? 'manager' : 'user' })
 }
 
 function openCreate() {
@@ -74,14 +83,14 @@ function openCreate() {
 
 function openEdit(row) {
   editing.value = row
-  Object.assign(form, { username: row.username, password: '', is_active: row.is_active })
+  Object.assign(form, { username: row.username, password: '', is_active: row.is_active, role: row.role })
   dialogVisible.value = true
 }
 
 async function load() {
   loading.value = true
   try {
-    const { data } = await listUsers()
+    const { data } = await listUsers(managerOnly.value ? { role: 'manager' } : undefined)
     users.value = data
   } finally {
     loading.value = false
@@ -99,7 +108,7 @@ async function save() {
   }
   saving.value = true
   try {
-    const payload = { username: form.username.trim() }
+    const payload = { username: form.username.trim(), role: form.role }
     if (form.password) payload.password = form.password
     if (editing.value) {
       payload.is_active = form.is_active
@@ -117,6 +126,11 @@ async function save() {
 }
 
 onMounted(load)
+watch(() => route.path, () => { resetForm(); load() })
+
+function roleLabel(role) {
+  return role === 'admin' ? '管理员' : role === 'manager' ? '经理' : '普通用户'
+}
 </script>
 
 <style scoped>

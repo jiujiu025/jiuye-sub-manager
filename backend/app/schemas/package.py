@@ -41,6 +41,7 @@ class PackageCreate(BaseModel):
     description: str | None = None
     expires_at: datetime | None = None
     owner_user_id: int | None = None
+    owner_customer_id: int | None = None
     token_name: str | None = Field(default=None, max_length=128)
     rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
 
@@ -52,8 +53,19 @@ class PackageUpdate(BaseModel):
     description: str | None = None
     expires_at: datetime | None = None
     owner_user_id: int | None = None
+    owner_customer_id: int | None = None
     token_name: str | None = Field(default=None, max_length=128)
     rules: PackageRulesPayload | None = None
+
+
+class PackageDuplicateRequest(BaseModel):
+    """复制套餐配置时允许覆盖的字段。"""
+
+    name: str = Field(min_length=1, max_length=128)
+    subscription_name: str | None = Field(default=None, max_length=128)
+    description: str | None = None
+    enabled: bool = False
+    expires_at: datetime | None = None
 
 
 class PackageSummary(BaseModel):
@@ -75,6 +87,9 @@ class PackageSummary(BaseModel):
     subscription_url: str | None = None
     owner_user_id: int | None = None
     owner_username: str | None = None
+    owner_customer_id: int | None = None
+    owner_customer_name: str | None = None
+    used_by_customers: list["PackageCustomerUsage"] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     rules: PackageRulesPayload = Field(default_factory=PackageRulesPayload)
@@ -82,6 +97,16 @@ class PackageSummary(BaseModel):
 
 class PackageDetail(PackageSummary):
     pass
+
+
+class PackageCustomerUsage(BaseModel):
+    """套餐被客户实际开通使用的汇总。"""
+
+    customer_id: int
+    customer_name: str
+    manager_username: str | None = None
+    subscription_count: int = 0
+    active_subscription_count: int = 0
 
 
 class PackageCreateResponse(PackageDetail):

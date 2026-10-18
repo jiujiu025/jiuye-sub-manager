@@ -18,7 +18,7 @@
       </div>
       <div class="signal-panel" aria-label="系统状态">
         <div class="signal-heading">
-          <span>系统脉搏</span>
+          <span>运营脉搏</span>
           <strong>{{ stats.failed_source_count ? '需要关注' : '运行稳定' }}</strong>
         </div>
         <div class="signal-bars" aria-hidden="true">
@@ -33,6 +33,10 @@
         <div class="signal-foot">
           <span>最近同步</span>
           <b>{{ stats.last_sync_at ? formatTime(stats.last_sync_at) : '尚未同步' }}</b>
+        </div>
+        <div class="signal-facts">
+          <span><b>{{ stats.enabled_source_count ?? 0 }}</b> 个来源启用</span>
+          <span><b>{{ stats.enabled_package_count ?? 0 }}</b> 个套餐可交付</span>
         </div>
       </div>
     </section>
@@ -70,6 +74,33 @@
             <strong>{{ stats.node_count ?? 0 }}</strong>
             <span>节点在线池</span>
           </div>
+        </div>
+      </div>
+
+      <div class="surface-card focus-card">
+        <div class="section-heading">
+          <div>
+            <h3>今天先看这里</h3>
+            <p>按影响范围排列的运营检查</p>
+          </div>
+          <el-icon class="section-heading-icon"><Aim /></el-icon>
+        </div>
+        <div class="focus-list">
+          <button class="focus-item" type="button" @click="router.push('/sources')">
+            <span class="focus-state" :class="{ warning: stats.failed_source_count }" />
+            <span class="focus-copy"><strong>{{ stats.failed_source_count ? `${stats.failed_source_count} 个来源需要处理` : '来源同步链路正常' }}</strong><small>检查上游状态与最近一次同步结果</small></span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
+          <button class="focus-item" type="button" @click="router.push('/nodes')">
+            <span class="focus-state info" />
+            <span class="focus-copy"><strong>{{ stats.node_count ?? 0 }} 个节点在节点池</strong><small>查看分类、备注和套餐使用关系</small></span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
+          <button class="focus-item" type="button" @click="router.push('/packages')">
+            <span class="focus-state success" />
+            <span class="focus-copy"><strong>{{ stats.enabled_package_count ?? 0 }} 个套餐可交付</strong><small>进入套餐管理继续配置和分发</small></span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
         </div>
       </div>
 
@@ -124,7 +155,7 @@ const cards = computed(() => [
   {
     label: '节点池',
     value: stats.value.node_count ?? 0,
-    meta: `自有节点 ${stats.value.self_node_count ?? 0} 个`,
+    meta: `导入外部节点 ${stats.value.self_node_count ?? 0} 个`,
     tone: 'amber',
     icon: 'Grid'
   },
@@ -288,6 +319,29 @@ function formatTime(value) {
   font-weight: 600;
 }
 
+.signal-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.signal-facts span {
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  color: #8794b0;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.signal-facts b {
+  display: block;
+  margin-bottom: 2px;
+  color: #fff;
+  font-size: 16px;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -365,13 +419,98 @@ function formatTime(value) {
 
 .dashboard-lower {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.75fr);
+  grid-template-columns: minmax(0, 1.18fr) minmax(300px, 0.92fr) minmax(260px, 0.7fr);
   gap: 16px;
 }
 
 .pulse-card,
+.focus-card,
 .quick-card {
   min-height: 190px;
+}
+
+.focus-card {
+  padding-bottom: 12px;
+}
+
+.focus-list {
+  margin-top: 18px;
+}
+
+.focus-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  padding: 11px 0;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.focus-item:last-child {
+  border-bottom: 0;
+}
+
+.focus-item:hover .focus-copy strong,
+.focus-item:hover > .el-icon {
+  color: var(--app-primary);
+}
+
+.focus-state {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--app-cyan);
+  box-shadow: 0 0 0 4px rgba(24, 184, 178, 0.12);
+  flex-shrink: 0;
+}
+
+.focus-state.warning {
+  background: var(--app-coral);
+  box-shadow: 0 0 0 4px rgba(240, 113, 97, 0.12);
+}
+
+.focus-state.info {
+  background: var(--app-primary);
+  box-shadow: 0 0 0 4px rgba(91, 92, 226, 0.12);
+}
+
+.focus-state.success {
+  background: var(--app-success);
+  box-shadow: 0 0 0 4px rgba(21, 159, 143, 0.12);
+}
+
+.focus-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.focus-copy strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-copy small {
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-item > .el-icon {
+  color: var(--app-text-muted);
+  flex-shrink: 0;
 }
 
 .section-heading {
@@ -504,7 +643,8 @@ function formatTime(value) {
 
 @media (max-width: 1100px) {
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dashboard-lower { grid-template-columns: 1fr; }
+  .dashboard-lower { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .quick-card { grid-column: 1 / -1; }
 }
 
 @media (max-width: 720px) {
@@ -512,6 +652,8 @@ function formatTime(value) {
   .hero-copy h2 { font-size: 27px; }
   .signal-panel { width: 100%; }
   .stats-grid { grid-template-columns: 1fr; }
+  .dashboard-lower { grid-template-columns: 1fr; }
+  .quick-card { grid-column: auto; }
   .pulse-row { align-items: flex-start; }
   .pulse-number { margin-left: auto; }
 }

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 
 @router.get("")
 def get_logs(
-    kind: Literal["sync", "subscription", "admin", "system", "error"] = "sync",
+    kind: Literal["sync", "subscription", "admin", "three_xui", "system", "error"] = "sync",
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -46,6 +46,12 @@ def get_logs(
         }
     if kind == "admin":
         items, total = repo.list_admin_logs(safe_page, safe_page_size)
+        return {
+            "items": [AdminLogResponse.model_validate(item) for item in items],
+            "total": total,
+        }
+    if kind == "three_xui":
+        items, total = repo.list_three_xui_logs(safe_page, safe_page_size)
         return {
             "items": [AdminLogResponse.model_validate(item) for item in items],
             "total": total,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from app.parsers.base import ParseError, ParsedNode
 from app.parsers.detector import decode_base64
@@ -36,32 +36,47 @@ def parse_ss_uri(uri: str) -> ParsedNode:
 
     if not uri.startswith("ss://"):
         raise ParseError("不是有效的 Shadowsocks 链接")
-    body = uri.removeprefix("ss://")
-    body, _, fragment = body.partition("#")
-    userinfo, sep, hostport = body.partition("@")
-    if sep and hostport:
+    try:
+        parsed = urlsplit(uri)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ParseError("SS 链接的服务器或端口无效") from exc
+
+    fragment = parsed.fragment
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    userinfo = parsed.netloc.rsplit("@", 1)[0] if "@" in parsed.netloc else ""
+    if host and port is not None and userinfo:
+        # SIP002 常见形式：Base64(method:password)@host:port；也兼容明文形式。
+        userinfo = unquote(userinfo)
         decoded = _decode_sip002(userinfo) or decode_base64(userinfo)
         auth = decoded if decoded and ":" in decoded else userinfo
     else:
-        # SIP002 允许把 method:password@host:port 整体编码进 authority。
-        decoded = _decode_sip002(body)
+        # SIP002 也允许把 method:password@host:port 整体编码进 authority。
+        encoded_authority = parsed.netloc or parsed.path
+        decoded = _decode_sip002(encoded_authority)
         if not decoded or "@" not in decoded:
             raise ParseError("SS 链接缺少有效的 SIP002 内容")
-        auth, _, hostport = decoded.rpartition("@")
+        auth, _, decoded_hostport = decoded.rpartition("@")
+        try:
+            decoded_parts = urlsplit(f"//{decoded_hostport}")
+            host = decoded_parts.hostname
+            port = decoded_parts.port
+        except ValueError as exc:
+            raise ParseError("SS 链接的服务器或端口无效") from exc
 
-    host, port_sep, port_text = hostport.rpartition(":")
-    if not port_sep:
-        raise ParseError("SS 链接缺少有效端口")
-    if not port_text.isdigit():
-        raise ParseError("SS 链接缺少有效端口")
+    if not host or port is None:
+        raise ParseError("SS 链接缺少服务器或端口")
     method, password = _decode_userinfo(auth)
     name = unquote(fragment) if fragment else host
     return ParsedNode(
         original_name=name,
         type="shadowsocks",
         server=host,
-        port=int(port_text),
+        port=port,
         password=password,
         cipher=method,
+        network=params.get("type"),
         country=detect_country(name),
+        metadata=params,
     )

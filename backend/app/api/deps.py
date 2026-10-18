@@ -64,3 +64,15 @@ def get_current_admin(
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
     return user
+
+
+def get_current_admin_or_manager(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """返回管理员或经理，供按归属范围读取业务数据。"""
+
+    user = _get_current_user(credentials, db)
+    if user.role not in {"admin", "manager"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
+    return user

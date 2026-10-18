@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
@@ -17,12 +17,13 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("", response_model=list[UserResponse])
 def list_users(
+    role: str | None = Query(default=None, pattern="^(admin|manager|user)$"),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin),
 ) -> list[User]:
     """返回用户列表，供管理员分配套餐。"""
 
-    return UserRepository(db).list()
+    return UserRepository(db).list(role=role)
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

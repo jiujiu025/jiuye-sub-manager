@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.node import Node
 from app.models.user import User
-from app.schemas.package import PackageCreate
+from app.schemas.package import PackageCreate, PackageDuplicateRequest
 from app.services.package_service import PackageService
 from app.utils.fingerprint import build_node_fingerprint
 
@@ -265,3 +265,54 @@ def test_package_preview_empty_returns_empty_list(db_session) -> None:
         _admin(db_session),
     )
     assert service.preview(package) == []
+
+
+def test_duplicate_package_copies_rules_but_isolates_identity(db_session) -> None:
+    """复制套餐不能继承 Token、归属、启用状态或实际到期时间。"""
+
+    _add_node(
+        db_session,
+        name="复制隔离节点",
+        node_type="vless",
+        server="copy.example.com",
+        port=443,
+        source_name="复制隔离来源",
+        country="香港",
+        uuid="copy-uuid",
+    )
+    db_session.commit()
+    node_id = db_session.scalar(select(Node.id).where(Node.server == "copy.example.com"))
+    service = PackageService(db_session)
+    source, source_token = service.create(
+        PackageCreate(
+            name="复制源套餐",
+            expires_at="2030-01-01T00:00:00Z",
+            rules={
+                "source_filter": ["复制隔离来源"],
+                "node_ids": [node_id],
+                "rename_rules": [{"country_abbr": True}],
+            },
+        ),
+        _admin(db_session),
+    )
+
+    duplicate, duplicate_token = service.duplicate(
+        source,
+        PackageDuplicateRequest(name="复制目标套餐"),
+        _admin(db_session),
+    )
+
+    assert duplicate.id != source.id
+    assert duplicate_token != source_token
+    assert duplicate.enabled is False
+    assert duplicate.owner_user_id is None
+    assert duplicate.expires_at is None
+    assert duplicate.token_hash != source.token_hash
+    assert duplicate.rules.source_filter == source.rules.source_filter
+    assert duplicate.rules.node_ids == source.rules.node_ids
+    assert duplicate.rules.rename_rules == source.rules.rename_rules
+
+    duplicate.rules.source_filter = ["其他来源"]
+    db_session.commit()
+    db_session.refresh(source)
+    assert source.rules.source_filter == ["复制隔离来源"]

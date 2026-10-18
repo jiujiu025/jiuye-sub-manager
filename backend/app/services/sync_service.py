@@ -14,12 +14,14 @@ from curl_cffi import Curl, CurlError, CurlInfo, CurlOpt
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests import Headers
 from curl_cffi.requests import errors as curl_errors
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
 from app.core.config import get_settings
 from app.models.base import utcnow
 from app.models.node import Node
+from app.models.package import PackageRule
 from app.models.source import Source
 from app.parsers import parse_content
 from app.parsers.base import ParseError, ParsedNode, validate_parsed_node
@@ -28,11 +30,13 @@ from app.repositories.node_repo import NodeRepository
 from app.repositories.source_repo import SourceRepository
 from app.schemas.source import SyncResult
 from app.services.subscription_service import SubscriptionService
+from app.services.notification_writer import create_admin_notifications
 from app.utils.fingerprint import (
     fingerprint_for_parsed,
     source_node_key_for_node,
     source_node_key_for_parsed,
 )
+from app.utils.node_code import allocate_node_code
 from app.utils.priority import build_source_priority
 
 logger = logging.getLogger(__name__)
@@ -379,11 +383,13 @@ class SyncService:
             seen: set[str] = set()
             new_nodes: list[Node] = []
             new_map: dict[str, Node] = {}
+            node_replacements: dict[int, Node] = {}
             for parsed in parsed_nodes:
                 fingerprint = fingerprint_for_parsed(parsed)
                 if fingerprint in seen:
                     continue
                 existing = self.node_repo.get_by_fingerprint(fingerprint)
+                replaced_node_id: int | None = None
                 if existing is not None and existing.source_id != source.id:
                     existing_priority = priority.get(existing.source_name, 1000)
                     if current_priority >= existing_priority:
@@ -394,6 +400,7 @@ class SyncService:
                         owner = self.source_repo.get(existing.source_id)
                         if owner is not None:
                             owner.node_count = max(0, owner.node_count - 1)
+                    replaced_node_id = existing.id
                     self.node_repo.delete(existing)
                 seen.add(fingerprint)
                 source_node_key = source_node_key_for_parsed(parsed)
@@ -408,9 +415,22 @@ class SyncService:
                     fingerprint,
                     enabled=old_node.enabled if old_node is not None else None,
                     source_node_key=source_node_key,
+                    node_code=old_node.node_code if old_node is not None else allocate_node_code(self.db),
+                    note=old_node.note if old_node is not None else None,
+                    country=(
+                        old_node.country
+                        if old_node is not None
+                        and old_node.server == parsed.server
+                        and not parsed.country
+                        else parsed.country
+                    ),
                 )
                 new_nodes.append(node)
                 new_map[fingerprint] = node
+                if old_node is not None:
+                    node_replacements[old_node.id] = node
+                if replaced_node_id is not None:
+                    node_replacements[replaced_node_id] = node
 
             old_keys = set(old_map)
             new_keys = set(new_map)
@@ -425,6 +445,8 @@ class SyncService:
 
             self.node_repo.delete_by_source(source.id)
             self.node_repo.bulk_add(new_nodes)
+            self.db.flush()
+            self._remap_package_node_ids(node_replacements, old_node_ids)
             source.node_count = len(new_nodes)
             source.version += 1
             source.last_sync_status = "success"
@@ -455,7 +477,7 @@ class SyncService:
             SubscriptionService.invalidate_for_source(
                 self.db,
                 source.name,
-                old_node_ids,
+                old_node_ids | set(node_replacements),
                 {node.id for node in new_nodes},
             )
         except Exception:
@@ -480,6 +502,36 @@ class SyncService:
             changed_count=changed,
             version=source.version,
         )
+
+    def _remap_package_node_ids(
+        self, replacements: dict[int, Node], removed_node_ids: set[int]
+    ) -> None:
+        """在来源替换节点后同步修正套餐直接节点引用。"""
+
+        if not removed_node_ids and not replacements:
+            return
+        for rule in self.db.scalars(select(PackageRule)).all():
+            if not isinstance(rule.node_ids, list):
+                continue
+            updated_ids: list[int] = []
+            changed = False
+            for value in rule.node_ids:
+                try:
+                    node_id = int(value)
+                except (TypeError, ValueError):
+                    updated_ids.append(value)
+                    continue
+                if node_id not in removed_node_ids and node_id not in replacements:
+                    updated_ids.append(value)
+                    continue
+                replacement = replacements.get(node_id)
+                if replacement is None or replacement.id is None:
+                    changed = True
+                    continue
+                updated_ids.append(replacement.id)
+                changed = changed or replacement.id != node_id or value != replacement.id
+            if changed:
+                rule.node_ids = updated_ids
 
     def _mark_not_modified(self, source: Source, duration_ms: int | None) -> SyncResult:
         """处理条件请求命中的 304，不重建节点也不递增版本。"""
@@ -526,6 +578,16 @@ class SyncService:
             node_count=source.node_count,
             error_message=error[:500],
         )
+        create_admin_notifications(
+            self.db,
+            kind="source_sync",
+            title="来源同步失败",
+            content=f"来源「{source.name}」同步失败：{error[:180]}",
+            dedupe_key=f"source-sync-failed:{source.id}:{utcnow().date().isoformat()}",
+            priority="high",
+            target_type="source",
+            target_id=source.id,
+        )
         self.db.commit()
         logger.warning("上游 %s 同步失败：%s", source.name, error)
         return SyncResult(
@@ -547,8 +609,12 @@ class SyncService:
         fingerprint: str,
         enabled: bool | None = None,
         source_node_key: str | None = None,
+        node_code: str | None = None,
+        note: str | None = None,
+        country: str | None = None,
     ) -> Node:
         return Node(
+            node_code=node_code,
             source_id=source.id,
             source_name=source.name,
             original_name=parsed.original_name,
@@ -558,6 +624,7 @@ class SyncService:
             port=parsed.port,
             uuid=parsed.uuid,
             password=parsed.password,
+            username=parsed.username,
             cipher=parsed.cipher,
             network=parsed.network,
             security=parsed.security,
@@ -568,10 +635,13 @@ class SyncService:
             short_id=parsed.short_id,
             path=parsed.path,
             host=parsed.host,
-            country=parsed.country,
+            country=country if country is not None else parsed.country,
             source_type="upstream",
+            node_category="subscription",
             enabled=True if enabled is None else enabled,
             node_fingerprint=fingerprint,
             source_node_key=source_node_key,
             metadata_json=parsed.metadata or None,
+            note=note,
+            last_seen_at=utcnow(),
         )

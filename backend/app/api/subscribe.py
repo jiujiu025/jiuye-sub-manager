@@ -54,7 +54,9 @@ def _content_type(output_format: str) -> str:
     }.get(output_format, "application/yaml; charset=utf-8")
 
 
-def _subscription_headers(package, output_format: str, content: str) -> dict[str, str]:
+def _subscription_headers(
+    package, output_format: str, content: str, expires_at=None
+) -> dict[str, str]:
     """构造订阅响应头，阻止浏览器和共享代理持久化 Token 对应内容。"""
 
     updated_at = package.updated_at
@@ -77,11 +79,15 @@ def _subscription_headers(package, output_format: str, content: str) -> dict[str
         "X-Subscription-Updated-At": updated_at.astimezone(timezone.utc).isoformat(),
         "X-Content-Type-Options": "nosniff",
     }
-    if package.expires_at is not None:
-        expires_at = package.expires_at
+    effective_expires_at = expires_at if expires_at is not None else package.expires_at
+    if effective_expires_at is not None:
+        expires_at = effective_expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
-        headers["Subscription-Userinfo"] = f"expire={int(expires_at.timestamp())}"
+        # 兼容更多客户端的标准订阅用户信息格式；到期时间由客户端自行执行。
+        headers["Subscription-Userinfo"] = (
+            f"upload=0; download=0; total=0; expire={int(expires_at.timestamp())}"
+        )
     return headers
 
 
@@ -97,7 +103,7 @@ def get_subscription(
     settings = get_settings()
     client_ip = request_client_ip(request)
     rate_key = stable_rate_key("subscription", client_ip, token)
-    decision = rate_limiter.check(
+    decision = rate_limiter.reserve(
         rate_key,
         settings.subscription_rate_limit,
         settings.subscription_rate_window_seconds,
@@ -108,44 +114,53 @@ def get_subscription(
             detail=RATE_LIMIT_MESSAGE,
             headers={"Retry-After": str(decision.retry_after)},
         )
-    rate_limiter.hit(
-        rate_key,
-        settings.subscription_rate_limit,
-        settings.subscription_rate_window_seconds,
-    )
     try:
         output_format = resolve_output_format(client, request.headers.get("user-agent"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     service = SubscriptionService(db)
-    package = service.resolve_package(token)
+    customer_subscription = service.resolve_customer_subscription(token)
+    package = customer_subscription.package if customer_subscription else service.resolve_package(token)
     if package is None:
         raise HTTPException(status_code=404, detail="订阅不存在")
-    service.record_token_access(package, client_ip)
+    if customer_subscription:
+        service.record_customer_token_access(customer_subscription, client_ip)
+    else:
+        service.record_token_access(package, client_ip)
     if not package.enabled:
         raise HTTPException(status_code=403, detail="套餐已禁用")
 
-    if service.is_expired(package):
+    subscription_expires_at = customer_subscription.expires_at if customer_subscription else None
+    is_expired = (
+        service.is_expired_at(subscription_expires_at)
+        if customer_subscription
+        else service.is_expired(package)
+    )
+    if is_expired:
         content, node_count = service.generate_expired(output_format)
         service.log_subscription(package.id, "expired", node_count, client_ip)
         return Response(
             content=content,
             media_type=_content_type(output_format),
             headers={
-                **_subscription_headers(package, output_format, content),
+                **_subscription_headers(package, output_format, content, subscription_expires_at),
                 "X-Subscription-Expired": "true",
             },
         )
 
-    cached_entry = service.get_cached_entry(package, output_format)
+    cached_entry = (
+        service.get_customer_cached_entry(customer_subscription, output_format)
+        if customer_subscription
+        else service.get_cached_entry(package, output_format)
+    )
     if cached_entry is not None:
         cached, cached_node_count = cached_entry
         service.log_subscription(package.id, "success", cached_node_count, client_ip)
         return Response(
             content=cached,
             media_type=_content_type(output_format),
-            headers=_subscription_headers(package, output_format, cached),
+            headers=_subscription_headers(package, output_format, cached, subscription_expires_at),
         )
 
     try:
@@ -154,10 +169,13 @@ def get_subscription(
         service.log_subscription(package.id, "empty", 0, client_ip)
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    service.set_cached(package, content, output_format, node_count)
+    if customer_subscription:
+        service.set_customer_cached(customer_subscription, content, output_format, node_count)
+    else:
+        service.set_cached(package, content, output_format, node_count)
     service.log_subscription(package.id, "success", node_count, client_ip)
     return Response(
         content=content,
         media_type=_content_type(output_format),
-        headers=_subscription_headers(package, output_format, content),
+        headers=_subscription_headers(package, output_format, content, subscription_expires_at),
     )

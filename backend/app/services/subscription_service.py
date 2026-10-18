@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hmac
 from datetime import datetime, timezone
+from urllib.parse import unquote, urlsplit
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.cache import cache_service
 from app.core.exceptions import BusinessError
@@ -14,6 +15,7 @@ from app.core.security import hash_subscription_token
 from app.exporters import export_nodes
 from app.models.package import Package, PackageRule
 from app.models.node import Node
+from app.models.subscription import CustomerSubscription, SubscriptionToken, SubscriptionTokenVersion
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
 from app.repositories.package_repo import PackageRepository
@@ -42,7 +44,90 @@ class SubscriptionService:
             package.token_hash, token_hash
         ):
             return None
+        # 套餐 Token 被一次性接管后，套餐原入口必须被屏蔽；否则客户订阅撤销后会从套餐入口绕过撤销。
+        if self.db.scalar(select(SubscriptionToken.id).where(SubscriptionToken.token_hash == token_hash)):
+            return None
         return package
+
+    def resolve_customer_subscription(self, token: str) -> CustomerSubscription | None:
+        """按独立客户订阅 Token 查找订阅；失效 Token 统一视为不存在。"""
+
+        token_hash = hash_subscription_token(token)
+        token_row = self.db.scalar(
+            select(SubscriptionToken)
+            .options(
+                joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.package),
+                joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.customer),
+            )
+            .where(SubscriptionToken.token_hash == token_hash)
+        )
+        if token_row is None or token_row.revoked_at is not None:
+            return None
+        if not hmac.compare_digest(token_row.token_hash, token_hash):
+            return None
+        subscription = token_row.subscription
+        if subscription.status != "active" or not subscription.customer.is_active:
+            return None
+        return subscription
+
+    @staticmethod
+    def extract_lookup_token(value: str) -> str | None:
+        """从原始 Token 或完整订阅链接中提取 Token，不记录原始输入。"""
+
+        raw = value.strip()
+        if not raw:
+            return None
+        if "://" in raw:
+            path = unquote(urlsplit(raw).path).strip("/")
+            parts = path.split("/")
+            try:
+                sub_index = parts.index("sub")
+            except ValueError:
+                return None
+            return parts[sub_index + 1] if sub_index + 1 < len(parts) else None
+        if raw.startswith("/sub/"):
+            return raw.removeprefix("/sub/").split("/", 1)[0] or None
+        return raw.split("/", 1)[0] or None
+
+    def find_subscription_by_token(self, value: str):
+        """按 Token 哈希查找客户订阅或历史套餐，供管理员找回业务记录。"""
+
+        token = self.extract_lookup_token(value)
+        if token is None:
+            return None
+        token_hash = hash_subscription_token(token)
+        customer_token = self.db.scalar(
+            select(SubscriptionToken)
+            .options(
+                joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.package),
+                joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.customer),
+                joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.manager),
+            )
+            .where(SubscriptionToken.token_hash == token_hash)
+        )
+        if customer_token is not None and hmac.compare_digest(customer_token.token_hash, token_hash):
+            return "customer_subscription", customer_token.subscription
+
+        history = self.db.scalar(
+            select(SubscriptionTokenVersion)
+            .options(
+                joinedload(SubscriptionTokenVersion.subscription).joinedload(CustomerSubscription.package),
+                joinedload(SubscriptionTokenVersion.subscription).joinedload(CustomerSubscription.customer),
+                joinedload(SubscriptionTokenVersion.subscription).joinedload(CustomerSubscription.manager),
+            )
+            .where(SubscriptionTokenVersion.token_hash == token_hash)
+            .order_by(SubscriptionTokenVersion.version.desc(), SubscriptionTokenVersion.id.desc())
+        )
+        if history is not None:
+            return "customer_subscription_history", history
+        package = self.db.scalar(
+            select(Package)
+            .options(joinedload(Package.owner), joinedload(Package.owner_customer))
+            .where(Package.token_hash == token_hash)
+        )
+        if package is not None and hmac.compare_digest(package.token_hash, token_hash):
+            return "package", package
+        return None
 
     @staticmethod
     def record_token_access(package: Package, client_ip: str | None) -> None:
@@ -53,6 +138,18 @@ class SubscriptionService:
         package.token_access_count = (package.token_access_count or 0) + 1
 
     @staticmethod
+    def record_customer_token_access(
+        subscription: CustomerSubscription, client_ip: str | None
+    ) -> None:
+        """记录客户订阅 Token 访问，不记录 Token 明文。"""
+
+        if subscription.token is None:
+            return
+        subscription.token.last_access_at = datetime.now(timezone.utc)
+        subscription.token.last_access_ip = client_ip
+        subscription.token.access_count = (subscription.token.access_count or 0) + 1
+
+    @staticmethod
     def is_expired(package: Package, now: datetime | None = None) -> bool:
         """判断套餐是否已到期；空到期时间表示长期有效。"""
 
@@ -60,6 +157,17 @@ class SubscriptionService:
             return False
         current = now or datetime.now(timezone.utc)
         expires_at = package.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at <= current
+
+    @staticmethod
+    def is_expired_at(expires_at: datetime | None, now: datetime | None = None) -> bool:
+        """判断一个独立订阅到期时间是否已过。"""
+
+        if expires_at is None:
+            return False
+        current = now or datetime.now(timezone.utc)
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         return expires_at <= current
@@ -158,7 +266,8 @@ class SubscriptionService:
     @staticmethod
     def cache_key(package: Package, output_format: str = "clash") -> str:
         version = cache_service.version(f"package:{package.id}:nodes")
-        return f"sub:{package.id}:{package.token_hash}:{output_format}:v{version}"
+        global_version = cache_service.version("global")
+        return f"sub:{package.id}:{package.token_hash}:{output_format}:v{version}:g{global_version}"
 
     @staticmethod
     def get_cached(package: Package, output_format: str = "clash") -> str | None:
@@ -195,6 +304,49 @@ class SubscriptionService:
             SubscriptionService.cache_key(package, output_format),
             (content, node_count),
         )
+
+    @staticmethod
+    def customer_cache_key(
+        subscription: CustomerSubscription, output_format: str = "clash"
+    ) -> str:
+        """客户订阅缓存同时隔离订阅 ID、Token 哈希和输出格式。"""
+
+        token_hash = subscription.token.token_hash if subscription.token else "missing"
+        version = cache_service.version(f"package:{subscription.package_id}:nodes")
+        subscription_version = cache_service.version(f"subscription:{subscription.id}")
+        global_version = cache_service.version("global")
+        return (
+            f"customer-sub:{subscription.id}:{token_hash}:{output_format}:"
+            f"v{version}:s{subscription_version}:g{global_version}"
+        )
+
+    @staticmethod
+    def get_customer_cached_entry(
+        subscription: CustomerSubscription, output_format: str = "clash"
+    ) -> tuple[str, int] | None:
+        cached = cache_service.get(SubscriptionService.customer_cache_key(subscription, output_format))
+        if cached is None:
+            return None
+        if isinstance(cached, tuple) and len(cached) == 2:
+            return str(cached[0]), int(cached[1])
+        return str(cached), 0
+
+    @staticmethod
+    def set_customer_cached(
+        subscription: CustomerSubscription,
+        content: str,
+        output_format: str,
+        node_count: int,
+    ) -> None:
+        cache_service.set(
+            SubscriptionService.customer_cache_key(subscription, output_format),
+            (content, node_count),
+        )
+
+    @staticmethod
+    def invalidate_customer_subscription(subscription_id: int) -> None:
+        cache_service.bump_version(f"subscription:{subscription_id}")
+        cache_service.delete_prefix(f"customer-sub:{subscription_id}:")
 
     @staticmethod
     def invalidate_package(package_id: int) -> None:

@@ -14,11 +14,18 @@ from app.api import (
     dashboard,
     health,
     logs,
+    manager,
     nodes,
+    notifications,
     packages,
+    customers,
+    customer_portal,
     settings as settings_api,
     sources,
     subscribe,
+    subscription_lines,
+    subscriptions,
+    three_xui,
     users,
 )
 from app.core.config import get_settings
@@ -35,9 +42,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """应用启动时检查管理员账号；关闭时释放数据库连接池。"""
-
     ensure_admin()
-    sync_scheduler.start()
+    if get_settings().scheduler_enabled:
+        sync_scheduler.start()
     yield
     sync_scheduler.shutdown()
     engine.dispose()
@@ -63,6 +70,13 @@ app.include_router(users.router, prefix="/api")
 app.include_router(sources.router, prefix="/api")
 app.include_router(nodes.router, prefix="/api")
 app.include_router(packages.router, prefix="/api")
+app.include_router(customers.router, prefix="/api")
+app.include_router(customer_portal.router, prefix="/api")
+app.include_router(subscriptions.router, prefix="/api")
+app.include_router(subscription_lines.router, prefix="/api")
+app.include_router(three_xui.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")
+app.include_router(manager.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(settings_api.router, prefix="/api")

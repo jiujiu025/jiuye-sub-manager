@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, and_
 from sqlalchemy.orm import Session
 
 from app.models.node import Node
@@ -16,6 +16,7 @@ class NodeRepository:
         self,
         *,
         source_id: int | None = None,
+        source_kind: str | None = None,
         source_name: str | None = None,
         node_type: str | None = None,
         country: str | None = None,
@@ -27,6 +28,25 @@ class NodeRepository:
         conditions = []
         if source_id is not None:
             conditions.append(Node.source_id == source_id)
+        if source_kind == "subscription":
+            # 兼容迁移前或测试直接写入的历史节点：只要带来源或标记为 upstream，仍视为订阅节点。
+            conditions.append(
+                or_(
+                    Node.node_category == "subscription",
+                    Node.source_id.is_not(None),
+                    Node.source_type == "upstream",
+                )
+            )
+        elif source_kind in {"custom", "external"}:
+            conditions.append(
+                and_(
+                    Node.node_category == "external",
+                    Node.source_id.is_(None),
+                    Node.source_type != "upstream",
+                )
+            )
+        elif source_kind == "forwarded":
+            conditions.append(Node.node_category == "forwarded")
         if source_name:
             conditions.append(Node.source_name == source_name)
         if node_type:
@@ -43,6 +63,8 @@ class NodeRepository:
                         func.lower(Node.name).contains(lowered, autoescape=True),
                         func.lower(Node.original_name).contains(lowered, autoescape=True),
                         func.lower(Node.server).contains(lowered, autoescape=True),
+                        func.lower(Node.node_code).contains(lowered, autoescape=True),
+                        func.lower(Node.note).contains(lowered, autoescape=True),
                     )
                 )
         if enabled is not None:

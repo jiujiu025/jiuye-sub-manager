@@ -1,4 +1,4 @@
-"""节点健康状态接口模型；本轮只定义状态，不主动探测节点。"""
+"""节点健康状态接口模型。"""
 
 from __future__ import annotations
 
@@ -11,9 +11,25 @@ NodeHealthStatus = Literal["healthy", "degraded", "offline", "unknown"]
 
 
 class NodeHealthResponse(BaseModel):
-    """节点健康状态，为后续探测器保留稳定 API。"""
+    """节点健康状态和最近一次探测结果。"""
 
     node_id: int
     status: NodeHealthStatus
     checked_at: datetime | None = None
+    latency_ms: int | None = None
     detail: str | None = None
+    tcp_status: str = "unknown"
+    tls_status: str = "unknown"
+    tcp_latency_ms: int | None = None
+    tls_latency_ms: int | None = None
+
+
+class NodeHealthSettings(BaseModel):
+    """节点健康检测的运行时设置。"""
+
+    health_enabled: bool
+    health_interval_minutes: int
+    health_timeout_seconds: float
+    health_failure_threshold: int
+    health_recovery_threshold: int
+    health_probe_concurrency: int

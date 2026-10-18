@@ -1,4 +1,4 @@
-"""进程内 TTL 缓存封装，后续可替换为 Redis 实现。"""
+"""本地 TTL 缓存封装与跨进程失效版本。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any
 from cachetools import TTLCache
 
 from app.core.config import get_settings
+from app.core.coordination import shared_cache_versions
 
 
 class CacheService:
@@ -38,16 +39,18 @@ class CacheService:
             self._cache.pop(key, None)
 
     def invalidate_all(self) -> None:
-        """清空全部缓存。"""
+        """清空本地缓存，并推进共享版本使其他 worker 的旧键失效。"""
 
         with self._lock:
             self._cache.clear()
+        shared_cache_versions.bump("global")
 
     def reconfigure(self, ttl_seconds: int) -> None:
         """按新 TTL 重建缓存，旧缓存立即失效。"""
 
         with self._lock:
             self._cache = TTLCache(maxsize=1024, ttl=ttl_seconds)
+        shared_cache_versions.bump("global")
 
     def delete_prefix(self, prefix: str) -> None:
         """删除指定业务前缀的缓存，不影响其他套餐。"""
@@ -60,16 +63,18 @@ class CacheService:
     def bump_version(self, namespace: str) -> int:
         """递增业务版本，用于缓存键隔离并避免旧值复用。"""
 
+        version = shared_cache_versions.bump(namespace)
         with self._lock:
-            version = self._versions.get(namespace, 0) + 1
             self._versions[namespace] = version
-            return version
+        return version
 
     def version(self, namespace: str) -> int:
-        """读取业务版本；进程重启后缓存和版本一起自然失效。"""
+        """读取共享业务版本，使其他 worker 的失效操作立即可见。"""
 
+        version = shared_cache_versions.get(namespace)
         with self._lock:
-            return self._versions.get(namespace, 0)
+            self._versions[namespace] = version
+        return version
 
 
 cache_service = CacheService()

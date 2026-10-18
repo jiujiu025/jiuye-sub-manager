@@ -6,6 +6,7 @@ import yaml
 
 from app.exporters.base import (
     BaseExporter,
+    canonical_node_type,
     exportable_items_for_format,
     unique_display_names,
 )
@@ -37,25 +38,26 @@ class ClashExporter(BaseExporter):
 
     @staticmethod
     def _to_proxy(node: Node, name: str) -> dict:
-        if node.type == "vless":
+        node_type = canonical_node_type(node.type)
+        if node_type == "vless":
             return ClashExporter._to_vless(node, name)
-        if node.type == "shadowsocks":
+        if node_type == "shadowsocks":
             return ClashExporter._to_ss(node, name)
-        if node.type == "vmess":
+        if node_type == "vmess":
             return ClashExporter._to_vmess(node, name)
-        if node.type == "trojan":
+        if node_type == "trojan":
             return ClashExporter._to_trojan(node, name)
-        if node.type == "anytls":
+        if node_type == "anytls":
             return ClashExporter._to_anytls(node, name)
-        if node.type == "socks":
+        if node_type == "socks":
             return ClashExporter._to_socks(node, name)
-        if node.type == "http":
+        if node_type == "http":
             return ClashExporter._to_http(node, name)
-        if node.type == "hysteria":
+        if node_type == "hysteria":
             return ClashExporter._to_hysteria(node, name)
-        if node.type == "hysteria2":
+        if node_type == "hysteria2":
             return ClashExporter._to_hysteria2(node, name)
-        if node.type == "tuic":
+        if node_type == "tuic":
             return ClashExporter._to_tuic(node, name)
         return {
             "name": name,

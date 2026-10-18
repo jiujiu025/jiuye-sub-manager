@@ -7,6 +7,7 @@ import json
 import yaml
 
 from app.exporters.clash import ClashExporter
+from app.exporters.uri import UriExporter
 from app.models.node import Node
 from app.utils.fingerprint import build_node_fingerprint
 
@@ -355,3 +356,56 @@ def test_export_vmess_trojan_socks_http() -> None:
     assert proxies["SK-01"]["username"] == "sk-user"
     assert proxies["HP-01"]["type"] == "http"
     assert proxies["HP-01"]["username"] == "hp-user"
+
+
+def test_uri_exporter_keeps_full_links_for_proxy_protocols() -> None:
+    nodes = [
+        _make_node(
+            name="SOCKS-01",
+            node_type="socks",
+            server="sk.example.com",
+            port=1080,
+            username="user@name",
+            password="p/a ss",
+        ),
+        _make_node(
+            name="HY2-01",
+            node_type="hysteria2",
+            server="hy.example.com",
+            port=443,
+            password="hy-pass",
+            tls=True,
+            sni="hy.example.com",
+            metadata_json={"obfs": "salamander", "obfs-password": "obfs-pass"},
+        ),
+        _make_node(
+            name="TUIC-01",
+            node_type="tuic",
+            server="tuic.example.com",
+            port=443,
+            uuid="tuic-uuid",
+            password="tuic-pass",
+            sni="tuic.example.com",
+        ),
+    ]
+    output = UriExporter().export([(node, node.name) for node in nodes])
+    assert "socks://user%40name:p%2Fa%20ss@sk.example.com:1080#SOCKS-01" in output
+    assert "hysteria2://hy-pass@hy.example.com:443" in output
+    assert "tuic://tuic-uuid:tuic-pass@tuic.example.com:443" in output
+
+
+def test_uri_exporter_accepts_legacy_socks5_type_alias() -> None:
+    """历史数据中的 socks5 类型也应导出为客户端可识别的 socks URI。"""
+
+    node = _make_node(
+        name="SK5-legacy",
+        node_type="socks5",
+        server="149.52.61.103",
+        port=5001,
+        username="legacy-user",
+        password="legacy-pass",
+    )
+
+    output = UriExporter().export([(node, node.name)])
+
+    assert output.startswith("socks://legacy-user:legacy-pass@149.52.61.103:5001")

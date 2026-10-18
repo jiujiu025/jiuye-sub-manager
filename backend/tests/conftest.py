@@ -21,11 +21,13 @@ os.environ["ADMIN_USERNAME"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "TestPass123!"
 os.environ["CORS_ORIGINS"] = "*"
 os.environ["SYNC_ENABLED"] = "false"
+os.environ["SCHEDULER_ENABLED"] = "false"
 
 from app.main import app  # noqa: E402
 from app.db import engine  # noqa: E402
 from app.models.base import Base  # noqa: E402
 from app.core.rate_limit import rate_limiter  # noqa: E402
+from app.seed import ensure_admin  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -36,6 +38,15 @@ def client() -> TestClient:
     Base.metadata.create_all(bind=engine)
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def reset_database(client: TestClient) -> None:
+    """每个测试使用全新的表数据，避免业务数据跨测试污染。"""
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    ensure_admin()
 
 
 @pytest.fixture(autouse=True)
