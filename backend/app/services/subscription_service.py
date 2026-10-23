@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hmac
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
@@ -15,17 +16,23 @@ from app.core.security import hash_subscription_token
 from app.exporters import export_nodes
 from app.models.package import Package, PackageRule
 from app.models.node import Node
-from app.models.subscription import CustomerSubscription, SubscriptionToken, SubscriptionTokenVersion
+from app.models.subscription import (
+    CustomerSubscription,
+    CustomerSubscriptionLine,
+    SubscriptionToken,
+    SubscriptionTokenVersion,
+)
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
 from app.repositories.package_repo import PackageRepository
 from app.schemas.package import PreviewNode
-from app.services.package_service import display_subscription_name
+from app.services.package_service import PackageService, display_subscription_name
 from app.utils.node_rules import (
     apply_numbering,
     apply_rename_rules,
     apply_sort_rules,
 )
+from app.services.customer_subscription_lines import ensure_lines, is_expired
 
 
 class SubscriptionService:
@@ -241,6 +248,119 @@ class SubscriptionService:
             raise BusinessError("套餐暂无可用节点", status_code=404)
         return content, node_count
 
+    def ensure_customer_lines(self, subscription: CustomerSubscription) -> list[CustomerSubscriptionLine]:
+        """确保客户订阅拥有线路快照，兼容迁移前创建的历史订阅。"""
+
+        return ensure_lines(self.db, subscription)
+
+    def generate_customer(
+        self,
+        subscription: CustomerSubscription,
+        output_format: str = "clash",
+    ) -> tuple[str, int]:
+        """按线路独立到期状态生成客户订阅内容。"""
+
+        lines = self.ensure_customer_lines(subscription)
+        if not lines:
+            # 历史空套餐继续沿用原有错误和动态规则行为。
+            return self.generate(subscription.package, output_format)
+
+        node_ids = {line.node_id for line in lines if line.node_id is not None}
+        nodes = (
+            list(
+                self.db.scalars(
+                    select(Node).where(Node.id.in_(node_ids), Node.enabled.is_(True))
+                ).all()
+            )
+            if node_ids
+            else []
+        )
+        node_by_id = {node.id: node for node in nodes}
+        candidates = [line for line in lines if line.node_id in node_by_id]
+        if not candidates:
+            raise BusinessError("套餐暂无可用节点", status_code=404)
+
+        # 所有线路都过期时保留统一提示，避免客户端看到一屏重复的续费线路。
+        if all(is_expired(line, node_by_id.get(line.node_id)) for line in candidates):
+            return self.generate_expired(output_format)
+
+        items: list[tuple[Node, str]] = []
+        for line in candidates:
+            node = node_by_id[line.node_id]
+            name = line.remark or node.name
+            if is_expired(line, node):
+                expired_node = copy.copy(node)
+                expired_node.type = "vless"
+                expired_node.server = "127.0.0.1"
+                expired_node.port = 1
+                expired_node.uuid = "00000000-0000-4000-8000-000000000000"
+                expired_node.network = "tcp"
+                expired_node.security = None
+                expired_node.tls = False
+                expired_node.sni = None
+                expired_node.fingerprint = None
+                expired_node.public_key = None
+                expired_node.short_id = None
+                expired_node.path = None
+                expired_node.host = None
+                expired_node.metadata_json = {}
+                name = f"{name} 已到期，请及时续费"
+                items.append((expired_node, name))
+            else:
+                items.append((node, name))
+
+        content, node_count = export_nodes(
+            items,
+            output_format,
+            subscription_name=display_subscription_name(subscription.package),
+        )
+        if node_count == 0:
+            raise BusinessError("套餐暂无可用节点", status_code=404)
+        return content, node_count
+
+    def preview_customer(self, subscription: CustomerSubscription) -> list[PreviewNode]:
+        """返回与实际客户订阅一致的逐条线路预览。"""
+
+        lines = self.ensure_customer_lines(subscription)
+        if not lines:
+            return PackageService(self.db).preview(subscription.package)
+        node_ids = {line.node_id for line in lines if line.node_id is not None}
+        nodes = list(
+            self.db.scalars(
+                select(Node).where(Node.id.in_(node_ids), Node.enabled.is_(True))
+            ).all()
+        ) if node_ids else []
+        node_by_id = {node.id: node for node in nodes}
+        result: list[PreviewNode] = []
+        for line in lines:
+            node = node_by_id.get(line.node_id)
+            if node is None:
+                continue
+            expired = is_expired(line, node)
+            if expired:
+                node = copy.copy(node)
+                node.type = "vless"
+                node.server = "127.0.0.1"
+                node.port = 1
+            name = line.remark or node.name
+            if expired:
+                name = f"{name} 已到期，请及时续费"
+            result.append(
+                PreviewNode(
+                    id=node.id,
+                    source_name=node.source_name,
+                    original_name=line.remark,
+                    name=name,
+                    type=node.type,
+                    server=node.server,
+                    port=node.port,
+                    country=node.country,
+                    expires_at=line.expires_at,
+                    line_id=line.id,
+                )
+            )
+        return result
+
     def generate_clash(self, package: Package) -> tuple[str, int]:
         """兼容现有调用方，生成默认 Clash YAML。"""
 
@@ -327,6 +447,17 @@ class SubscriptionService:
         cached = cache_service.get(SubscriptionService.customer_cache_key(subscription, output_format))
         if cached is None:
             return None
+        if isinstance(cached, tuple) and len(cached) >= 3:
+            expires_at = cached[2]
+            if expires_at is not None:
+                expires_at = (
+                    expires_at.replace(tzinfo=timezone.utc)
+                    if expires_at.tzinfo is None
+                    else expires_at
+                )
+                if expires_at <= datetime.now(timezone.utc):
+                    return None
+            return str(cached[0]), int(cached[1])
         if isinstance(cached, tuple) and len(cached) == 2:
             return str(cached[0]), int(cached[1])
         return str(cached), 0
@@ -338,9 +469,20 @@ class SubscriptionService:
         output_format: str,
         node_count: int,
     ) -> None:
+        line_expiries = [
+            line.expires_at
+            for line in subscription.lines
+            if line.expires_at is not None
+        ]
+        line_expiries.extend(
+            line.node.expires_at
+            for line in subscription.lines
+            if line.node is not None and line.node.expires_at is not None
+        )
+        next_line_expiry = min(line_expiries) if line_expiries else None
         cache_service.set(
             SubscriptionService.customer_cache_key(subscription, output_format),
-            (content, node_count),
+            (content, node_count, next_line_expiry),
         )
 
     @staticmethod

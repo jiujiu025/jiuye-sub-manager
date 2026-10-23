@@ -260,6 +260,64 @@ def test_customer_subscription_expiry_does_not_change_package_expiry(
     assert package_response.headers.get("x-subscription-expired") != "true"
 
 
+def test_customer_subscription_lines_expire_independently(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """同一客户订阅中，单条线路到期不应影响其他线路。"""
+
+    for index, name in enumerate(("线路一", "线路二")):
+        response = client.post(
+            "/api/nodes",
+            json={
+                "name": name,
+                "type": "vless",
+                "server": f"198.51.100.{40 + index}",
+                "port": 443,
+                "uuid": f"00000000-0000-4000-8000-0000000000{40 + index}",
+                "network": "tcp",
+                "security": "tls",
+                "tls": True,
+                "source_subtype": "custom_manual",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+    package_id = _create_package(client, auth_headers, "按线路到期套餐")
+    customer_id = _create_customer(client, auth_headers, "按线路到期客户")
+    created = client.post(
+        "/api/subscriptions",
+        json={
+            "package_id": package_id,
+            "customer_id": customer_id,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    subscription_id = created.json()["id"]
+    token = created.json()["token"]
+
+    lines = client.get(
+        f"/api/subscriptions/{subscription_id}/lines", headers=auth_headers
+    )
+    assert lines.status_code == 200
+    assert len(lines.json()) == 2
+    first_line = lines.json()[0]
+    expired_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    updated = client.put(
+        f"/api/subscriptions/{subscription_id}/lines/{first_line['id']}",
+        json={"expires_at": expired_at},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "expired"
+
+    response = client.get(f"/sub/{token}")
+    assert response.status_code == 200
+    assert "线路一 已到期，请及时续费" in response.text
+    assert "198.51.100.41" in response.text
+
+
 def test_package_with_customer_subscription_cannot_be_deleted(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -926,6 +984,13 @@ def test_manager_stats_and_subscription_preview_are_scoped(
     assert stats.json()["active_subscription_count"] == 1
     assert stats.json()["sales_total"] == "88.00"
     assert stats.json()["regions"] == [{"region": "香港", "customer_count": 1}]
+
+    health = client.get("/api/manager/health", headers=manager_headers)
+    assert health.status_code == 200
+    assert health.json() == []
+    manager_logs = client.get("/api/logs/manager", headers=manager_headers)
+    assert manager_logs.status_code == 200
+    assert all(item["admin_user_id"] == manager_a for item in manager_logs.json()["items"])
 
     preview = client.get(
         f"/api/manager/subscriptions/{subscription_a.json()['id']}/preview",

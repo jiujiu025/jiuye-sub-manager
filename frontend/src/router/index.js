@@ -31,7 +31,7 @@ const routes = [
   {
     path: '/health',
     component: HealthDashboardView,
-    meta: { auth: true, admin: true, title: '健康大屏', subtitle: '实时查看导入外部线路健康状态' }
+    meta: { auth: true, staff: true, title: '健康大屏', subtitle: '查看自己客户线路的健康状态' }
   },
   {
     path: '/sources',
@@ -57,6 +57,11 @@ const routes = [
     path: '/logs',
     component: LogsView,
     meta: { auth: true, admin: true, title: '系统日志', subtitle: '查看同步、订阅与操作记录' }
+  },
+  {
+    path: '/manager-logs',
+    component: LogsView,
+    meta: { auth: true, staff: true, title: '系统日志', subtitle: '查看自己的操作记录' }
   },
   {
     path: '/settings',

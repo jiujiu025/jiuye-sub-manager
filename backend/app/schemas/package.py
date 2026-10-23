@@ -146,3 +146,4 @@ class PreviewNode(BaseModel):
     server: str
     port: int
     country: str | None
+    expires_at: datetime | None = None

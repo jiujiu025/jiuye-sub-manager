@@ -11,18 +11,24 @@ import ssl
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
 from app.models.base import utcnow
 from app.models.node import Node
 from app.exporters.singbox import SingboxExporter
 from app.services.notification_writer import create_admin_notifications
+from app.services.subscription_state import active_subscription_clause
+from app.models.subscription import CustomerSubscription
+from app.models.user import User
+from app.services.manager_scope import effective_manager_id
+from app.services.package_service import PackageService
 from app.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
@@ -434,16 +440,14 @@ class NodeHealthService:
         self.db.refresh(node)
         return node
 
-    def run_all(self) -> int:
+    def run_all(self, *, include_all: bool = False) -> int:
+        """批量检测节点；定时任务默认只检测自有节点，手动操作可检测全部启用节点。"""
+
         settings = SettingsService(self.db).get()
-        nodes = list(
-            self.db.scalars(
-                select(Node).where(
-                    Node.enabled.is_(True),
-                    Node.source_type == "custom",
-                )
-            ).all()
-        )
+        conditions = [Node.enabled.is_(True)]
+        if not include_all:
+            conditions.append(Node.source_type == "custom")
+        nodes = list(self.db.scalars(select(Node).where(*conditions)).all())
         targets: dict[int, NodeProbeTarget] = {}
         results: dict[int, ProbeResult] = {}
         for node in nodes:
@@ -474,7 +478,8 @@ class NodeHealthService:
             alerts.extend(self._apply_result(node, results[node.id], settings))
         self.db.commit()
         self._dispatch(alerts)
-        logger.info("本次节点健康检测完成，共检测 %s 个启用自有节点", len(nodes))
+        scope_label = "全部启用节点" if include_all else "启用自有节点"
+        logger.info("本次节点健康检测完成，共检测 %s 个%s", len(nodes), scope_label)
         return len(nodes)
 
     def _target(self, node: Node) -> NodeProbeTarget:
@@ -570,6 +575,29 @@ class NodeHealthService:
         dedupe_key: str,
         priority: str,
     ) -> HealthAlert:
+        recipients = list(
+            self.db.scalars(
+                select(User.id).where(User.role == "admin", User.is_active.is_(True))
+            ).all()
+        )
+        subscriptions = self.db.scalars(
+            select(CustomerSubscription)
+            .options(
+                joinedload(CustomerSubscription.customer),
+                joinedload(CustomerSubscription.package),
+                joinedload(CustomerSubscription.token),
+            )
+            .join(CustomerSubscription.customer)
+            .outerjoin(CustomerSubscription.token)
+            .where(active_subscription_clause(datetime.now(timezone.utc)))
+        ).all()
+        package_service = PackageService(self.db)
+        for subscription in subscriptions:
+            manager_id = effective_manager_id(subscription)
+            if manager_id is None or manager_id in recipients:
+                continue
+            if any(item.id == node.id for item in package_service.preview(subscription.package)):
+                recipients.append(manager_id)
         create_admin_notifications(
             self.db,
             kind="node_health",
@@ -579,6 +607,7 @@ class NodeHealthService:
             priority=priority,
             target_type="node",
             target_id=node.id,
+            recipient_user_ids=recipients,
         )
         return HealthAlert(node.name, node.id, title, content, dedupe_key, priority)
 

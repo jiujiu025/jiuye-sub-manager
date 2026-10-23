@@ -122,6 +122,7 @@
           <el-table-column prop="type" label="协议" width="120" />
           <el-table-column label="服务器" min-width="190"><template #default="{ row }">{{ row.server }}:{{ row.port }}</template></el-table-column>
           <el-table-column prop="country" label="地区" width="100"><template #default="{ row }">{{ row.country || '-' }}</template></el-table-column>
+          <el-table-column label="线路到期" width="190"><template #default="{ row }"><el-date-picker v-if="row.line_id" v-model="row.expires_at" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable placeholder="长期有效" size="small" @change="saveLineExpiry(row)" /><span v-else>-</span></template></el-table-column>
           <el-table-column label="分享" width="130"><template #default="{ row }"><el-button link type="primary" @click="sharePreviewNode(row)">分享</el-button><el-button link type="primary" @click="showPreviewNodeQr(row)">二维码</el-button></template></el-table-column>
         </el-table>
       </div>
@@ -157,7 +158,7 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import QRCode from 'qrcode'
-import { cancelSubscription, createSubscription, exportManagerSubscriptionNode, exportSubscriptionLines, getPackageSubscriptionUrl, getSubscriptionTokenHistory, getSubscriptionUrl, listCustomers, listPackages, listSubscriptionLines, listSubscriptions, listUsers, lookupSubscription, previewCustomerSubscription, regenerateSubscriptionToken, renewSubscription, restoreSubscriptionToken, resumeSubscription, revokeSubscriptionToken, suspendSubscription, updateSubscription } from '../api'
+import { cancelSubscription, createSubscription, exportManagerSubscriptionNode, exportSubscriptionLines, getPackageSubscriptionUrl, getSubscriptionTokenHistory, getSubscriptionUrl, listCustomers, listPackages, listSubscriptionLines, listSubscriptions, listUsers, lookupSubscription, previewCustomerSubscription, regenerateSubscriptionToken, renewSubscription, restoreSubscriptionToken, resumeSubscription, revokeSubscriptionToken, suspendSubscription, updateSubscription, updateSubscriptionLine } from '../api'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
@@ -399,6 +400,17 @@ async function saveNote() {
   }
 }
 async function preview(row) { previewSubscriptionId.value = row.id; previewLoading.value = true; previewVisible.value = true; try { const { data } = await previewCustomerSubscription(row.id); previewRows.value = data } finally { previewLoading.value = false } }
+async function saveLineExpiry(row) {
+  if (!row.line_id || !previewSubscriptionId.value) return
+  try {
+    await updateSubscriptionLine(previewSubscriptionId.value, row.line_id, { expires_at: row.expires_at || null })
+    ElMessage.success('线路到期时间已更新')
+    const { data } = await previewCustomerSubscription(previewSubscriptionId.value)
+    previewRows.value = data
+  } catch {
+    ElMessage.error('线路到期时间更新失败')
+  }
+}
 async function shareLine(row) { previewSubscriptionId.value = row.subscription_id; await sharePreviewNode({ id: row.node_id, name: row.node_name }) }
 async function showLineQr(row) { await shareLine(row) }
 async function sharePreviewNode(row) {

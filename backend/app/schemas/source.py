@@ -21,6 +21,7 @@ class SourceCreate(BaseModel):
     enabled: bool = True
     allow_empty_override: bool = False
     format: SourceFormat = "auto"
+    expires_at: datetime | None = None
 
 
 class SourceUpdate(BaseModel):
@@ -29,6 +30,7 @@ class SourceUpdate(BaseModel):
     enabled: bool | None = None
     allow_empty_override: bool | None = None
     format: SourceFormat | None = None
+    expires_at: datetime | None = None
 
 
 class SourceSummary(ORMModel):
@@ -40,6 +42,7 @@ class SourceSummary(ORMModel):
     enabled: bool
     allow_empty_override: bool
     format: str
+    expires_at: datetime | None
     node_count: int
     version: int
     last_sync_status: str
@@ -67,6 +70,7 @@ class SourceDetail(ORMModel):
     enabled: bool
     allow_empty_override: bool
     format: str
+    expires_at: datetime | None
     node_count: int
     version: int
     last_sync_status: str

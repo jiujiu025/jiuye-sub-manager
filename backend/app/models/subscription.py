@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, utcnow
@@ -46,6 +46,38 @@ class CustomerSubscription(Base):
     token: Mapped["SubscriptionToken | None"] = relationship(
         back_populates="subscription", uselist=False, cascade="all, delete-orphan"
     )
+    lines: Mapped[list["CustomerSubscriptionLine"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan", order_by="CustomerSubscriptionLine.position"
+    )
+
+
+class CustomerSubscriptionLine(Base):
+    """客户订阅中的线路快照；每条线路可以独立到期。"""
+
+    __tablename__ = "customer_subscription_lines"
+    __table_args__ = (
+        UniqueConstraint("subscription_id", "node_id", name="uq_customer_subscription_lines_node"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_subscriptions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    # 节点删除后保留订阅线路记录，避免历史销售记录因资源池清理而丢失。
+    node_id: Mapped[int | None] = mapped_column(
+        ForeignKey("nodes.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    remark: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    subscription: Mapped[CustomerSubscription] = relationship(back_populates="lines")
+    node: Mapped["Node | None"] = relationship()
 
 
 class SubscriptionToken(Base):

@@ -14,6 +14,7 @@
       <el-button type="warning" plain :disabled="!selected.length" @click="openBatchForward">批量转发</el-button>
       <el-button type="danger" plain :disabled="!selected.length" @click="batchAction('delete')">批量删除</el-button>
       <el-button :loading="countryResolving" @click="resolveCountries">识别空白地区</el-button>
+      <el-button type="success" plain :loading="healthCheckingAll" @click="checkAllHealth">全部检测</el-button>
       <el-button type="primary" @click="openCreate">
         <el-icon><Plus /></el-icon>
         导入外部节点
@@ -36,7 +37,9 @@
         <el-input v-model="filters.keyword" clearable placeholder="名称/服务器" @keyup.enter="load" />
       </el-form-item>
       <el-form-item label="上游来源">
-        <el-input v-model="filters.source_name" clearable placeholder="按来源名称搜索" @keyup.enter="load" />
+        <el-select v-model="filters.source_name" clearable filterable placeholder="全部来源" @change="load">
+          <el-option v-for="source in sourceFilterOptions" :key="source" :label="source" :value="source" />
+        </el-select>
       </el-form-item>
       <el-form-item label="类型">
         <el-select v-model="filters.node_type" clearable placeholder="全部" @change="load">
@@ -96,6 +99,9 @@
       </el-table-column>
       <el-table-column prop="note" label="备注" min-width="170" show-overflow-tooltip>
         <template #default="{ row }">{{ row.note || '-' }}</template>
+      </el-table-column>
+      <el-table-column label="资源到期" width="170">
+        <template #default="{ row }">{{ row.expires_at ? formatTime(row.expires_at) : '长期有效' }}</template>
       </el-table-column>
       <el-table-column label="最近发现" width="155">
         <template #default="{ row }">{{ formatTime(row.last_seen_at) }}</template>
@@ -307,6 +313,10 @@
           <el-form-item label="来源备注">
             <el-input v-model="importNote" maxlength="2000" clearable placeholder="例如：供应商 A、客户提供、备用线路" />
           </el-form-item>
+          <el-form-item label="资源到期时间">
+            <el-date-picker v-model="importExpiresAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable placeholder="留空表示长期有效" />
+            <div class="form-tip">到期后不会再进入新订阅，已有客户线路也会显示为已到期。</div>
+          </el-form-item>
         </el-form>
       <el-tabs v-model="activeTab">
         <el-tab-pane label="链接导入" name="url">
@@ -432,6 +442,9 @@
             <el-form-item label="备注">
               <el-input v-model="form.note" type="textarea" :rows="2" maxlength="2000" show-word-limit placeholder="例如：主线路，适合日常使用" />
             </el-form-item>
+            <el-form-item label="资源到期时间">
+              <el-date-picker v-model="form.expires_at" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable placeholder="留空表示长期有效" />
+            </el-form-item>
             <el-form-item label="启用">
               <el-switch v-model="form.enabled" />
             </el-form-item>
@@ -513,6 +526,9 @@
         <el-form-item label="备注">
           <el-input v-model="form.note" type="textarea" :rows="2" maxlength="2000" show-word-limit placeholder="例如：主线路，适合日常使用" />
         </el-form-item>
+        <el-form-item label="资源到期时间">
+          <el-date-picker v-model="form.expires_at" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable placeholder="留空表示长期有效" />
+        </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
         </el-form-item>
@@ -572,15 +588,18 @@ import {
   getNodeUsage,
   getNode,
   checkNodeHealth,
+  checkAllNodeHealth,
   importNodes,
   listThreeXUIServers,
   getThreeXUITask,
   createThreeXUIForwardTask,
   createThreeXUIForwardBatch,
   listNodes,
+  listSources,
   updateNode,
   resolveNodeCountries
 } from '../api'
+import { formatApiDate } from '../utils/datetime'
 
 const countryOptions = [
   '香港', '台湾', '日本', '韩国', '新加坡', '美国', '英国',
@@ -612,8 +631,10 @@ const loading = ref(false)
 const saving = ref(false)
 const importing = ref(false)
 const healthChecking = ref(null)
+const healthCheckingAll = ref(false)
 const countryResolving = ref(false)
 const selected = ref([])
+const sourceFilterOptions = ref([])
 const route = useRoute()
 const dialogVisible = ref(false)
 const shareVisible = ref(false)
@@ -640,6 +661,7 @@ const activeTab = ref('url')
 const importUrlText = ref('')
 const importConfigText = ref('')
 const importNote = ref('')
+const importExpiresAt = ref(null)
 const importResult = ref(null)
 const filters = reactive({
   keyword: '',
@@ -667,7 +689,8 @@ const form = reactive({
   host: '',
   country: '',
   enabled: true,
-  note: ''
+  note: '',
+  expires_at: null
 })
 
 async function load() {
@@ -737,7 +760,8 @@ function resetForm() {
     host: '',
     country: '',
     enabled: true,
-    note: ''
+    note: '',
+    expires_at: null
   })
 }
 
@@ -748,6 +772,7 @@ function openCreate() {
   importUrlText.value = ''
   importConfigText.value = ''
   importNote.value = ''
+  importExpiresAt.value = null
   importResult.value = null
   dialogVisible.value = true
 }
@@ -775,7 +800,8 @@ async function openEdit(row) {
     host: data.host || '',
     country: data.country || '',
     enabled: data.enabled,
-    note: data.note || ''
+    note: data.note || '',
+    expires_at: data.expires_at || null
   })
   dialogVisible.value = true
 }
@@ -792,7 +818,8 @@ async function doImport(sourceSubtype) {
       content,
       source_subtype: sourceSubtype,
       format: 'auto',
-      note: importNote.value.trim() || null
+      note: importNote.value.trim() || null,
+      expires_at: importExpiresAt.value || null
     })
     importResult.value = data
     ElMessage.success(`导入完成：成功 ${data.success}，重复 ${data.duplicate}，失败 ${data.failed}`)
@@ -994,6 +1021,26 @@ async function checkHealth(row) {
   }
 }
 
+async function checkAllHealth() {
+  try {
+    await ElMessageBox.confirm(
+      '将检测所有启用的资源池节点，节点数量较多时可能需要一些时间。确认继续吗？',
+      '全部检测',
+      { type: 'info', confirmButtonText: '开始检测', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  healthCheckingAll.value = true
+  try {
+    const { data } = await checkAllNodeHealth()
+    ElMessage.success(`全部检测完成，共检测 ${data.checked} 个启用节点`)
+    await load()
+  } finally {
+    healthCheckingAll.value = false
+  }
+}
+
 async function copyShareContent() {
   try {
     await navigator.clipboard.writeText(shareContent.value)
@@ -1033,11 +1080,19 @@ async function batchAction(action) {
   await load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadSourceFilterOptions()
+})
 onBeforeUnmount(stopForwardProgressPolling)
 
 function formatTime(value) {
-  return value ? new Date(value).toLocaleString() : '-'
+  return formatApiDate(value)
+}
+
+async function loadSourceFilterOptions() {
+  const { data } = await listSources()
+  sourceFilterOptions.value = data.items.map((item) => item.name)
 }
 
 function healthLabel(value) {

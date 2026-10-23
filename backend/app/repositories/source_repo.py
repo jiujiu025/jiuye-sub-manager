@@ -44,6 +44,7 @@ class SourceRepository:
         enabled: bool,
         allow_empty_override: bool,
         fmt: str,
+        expires_at=None,
     ) -> Source:
         source = Source(
             name=name,
@@ -51,6 +52,7 @@ class SourceRepository:
             enabled=enabled,
             allow_empty_override=allow_empty_override,
             format=fmt,
+            expires_at=expires_at,
         )
         self.db.add(source)
         return source

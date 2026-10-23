@@ -21,6 +21,9 @@ class Source(Base):
         Boolean, default=False, nullable=False
     )
     format: Mapped[str] = mapped_column(String(16), default="auto", nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     node_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_sync_status: Mapped[str] = mapped_column(

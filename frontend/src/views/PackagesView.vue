@@ -379,6 +379,14 @@
             clearable
             style="width: 100%"
           />
+          <div class="expiry-quick-actions">
+            <span class="form-hint">快捷设置（从当前时间起）</span>
+            <el-button-group>
+              <el-button size="small" @click="setQuickExpiry(1)">1个月有效期</el-button>
+              <el-button size="small" @click="setQuickExpiry(3)">3个月有效期</el-button>
+              <el-button size="small" @click="setQuickExpiry(12)">1年有效期</el-button>
+            </el-button-group>
+          </div>
           <div class="form-hint">到期后订阅只返回不可连接的续费提示线路，旧缓存不会继续生效。</div>
         </el-form-item>
 
@@ -409,7 +417,14 @@
               </div>
             </div>
             <div class="source-group">
-              <div class="source-group-title">导入外部节点</div>
+              <div class="source-group-title">资源池</div>
+              <el-select v-model="resourceFilter" clearable filterable style="width: 240px" placeholder="全部资源">
+                <el-option label="全部资源" value="all" />
+                <el-option label="上游订阅节点" value="category:subscription" />
+                <el-option label="导入外部节点" value="category:external" />
+                <el-option label="已转发节点" value="category:forwarded" />
+                <el-option v-for="source in resourceSourceOptions" :key="`source-${source}`" :label="`来源：${source}`" :value="`source:${source}`" />
+              </el-select>
               <el-input
                 v-model="selfNodeSearch"
                 placeholder="搜索编号、名称、服务器或备注"
@@ -430,7 +445,7 @@
                     </span>
                   </el-checkbox>
                 </el-checkbox-group>
-                <div v-if="!filteredSelfNodes.length" class="form-hint">暂无匹配的导入外部节点</div>
+                <div v-if="!filteredSelfNodes.length" class="form-hint">暂无匹配的资源节点</div>
               </div>
               <div class="source-actions">
                 <el-button size="small" @click="selectAllSelfNodes">全选</el-button>
@@ -656,6 +671,7 @@ import {
   togglePackage,
   updatePackage
 } from '../api'
+import { formatApiDate } from '../utils/datetime'
 
 const countryOptions = [
   '香港', '台湾', '日本', '韩国', '新加坡', '美国', '英国',
@@ -680,6 +696,7 @@ const includeKeywordInput = ref('')
 const excludeKeywordInput = ref('')
 const selfNodes = ref([])
 const selfNodeSearch = ref('')
+const resourceFilter = ref('all')
 const searchKeyword = ref('')
 const statusFilter = ref('')
 const sortFilter = ref('')
@@ -762,13 +779,26 @@ watch([searchKeyword, statusFilter, sortFilter], () => {
 const filteredSelfNodes = computed(() => {
   const keyword = selfNodeSearch.value.trim().toLowerCase()
   if (!keyword) {
-    return selfNodes.value
+    return filterResourceNodes(selfNodes.value)
   }
-  return selfNodes.value.filter((node) => {
+  return filterResourceNodes(selfNodes.value).filter((node) => {
     const text = `${node.node_code || ''} ${node.name} ${node.server} ${node.country || ''} ${node.note || ''}`.toLowerCase()
     return text.includes(keyword)
   })
 })
+
+const resourceSourceOptions = computed(() => [...new Set(selfNodes.value.map((node) => node.source_name).filter(Boolean))].sort())
+
+function filterResourceNodes(nodes) {
+  if (!resourceFilter.value || resourceFilter.value === 'all') return nodes
+  if (resourceFilter.value.startsWith('category:')) {
+    return nodes.filter((node) => node.node_category === resourceFilter.value.slice(9))
+  }
+  if (resourceFilter.value.startsWith('source:')) {
+    return nodes.filter((node) => node.source_name === resourceFilter.value.slice(7))
+  }
+  return nodes
+}
 
 const missingFormSources = computed(() => {
   if (!sourcesLoaded.value) return []
@@ -946,12 +976,16 @@ function showUsage(pkg) {
 }
 
 async function loadSelfNodes() {
-  const { data } = await listNodes({
-    source_name: '自有节点',
-    enabled: true,
-    page_size: 100
-  })
-  selfNodes.value = data.items
+  const first = await listNodes({ page: 1, page_size: 100 })
+  const nodes = [...first.data.items]
+  const pages = Math.ceil(first.data.total / first.data.page_size)
+  if (pages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, index) => listNodes({ page: index + 2, page_size: 100 }))
+    )
+    rest.forEach(({ data }) => nodes.push(...data.items))
+  }
+  selfNodes.value = nodes.filter((node) => node.enabled)
 }
 
 function selectAllSources() {
@@ -983,6 +1017,7 @@ function resetForm() {
       exclude_keywords: []
     }
   })
+  resourceFilter.value = 'all'
   includeKeywordInput.value = ''
   excludeKeywordInput.value = ''
   resetRuleForms()
@@ -1001,6 +1036,17 @@ function formatDatePickerValue(value) {
     padNumber(date.getMonth() + 1),
     padNumber(date.getDate())
   ].join('-') + `T${padNumber(date.getHours())}:${padNumber(date.getMinutes())}:${padNumber(date.getSeconds())}`
+}
+
+function setQuickExpiry(months) {
+  const now = new Date()
+  const day = now.getDate()
+  const target = new Date(now)
+  target.setDate(1)
+  target.setMonth(target.getMonth() + months)
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
+  target.setDate(Math.min(day, lastDay))
+  form.expires_at = formatDatePickerValue(target)
 }
 
 function toUtcIso(value) {
@@ -1295,7 +1341,7 @@ async function handleMore(command, row) {
 }
 
 function formatTime(value) {
-  return value ? new Date(value).toLocaleString() : '-'
+  return formatApiDate(value)
 }
 
 let expiryTimer
@@ -1352,6 +1398,18 @@ onUnmounted(() => {
   margin-top: 4px;
   font-size: 12px;
   color: var(--app-text-muted);
+}
+
+.expiry-quick-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.expiry-quick-actions .form-hint {
+  margin-top: 0;
 }
 
 .package-grid {

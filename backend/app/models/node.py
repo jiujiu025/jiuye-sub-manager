@@ -54,6 +54,9 @@ class Node(Base):
     )
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

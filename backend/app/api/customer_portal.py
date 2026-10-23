@@ -20,6 +20,7 @@ from app.services.customer_subscription_service import CustomerSubscriptionServi
 from app.services.package_service import PackageService
 from app.services.subscription_state import effective_subscription_status, is_effectively_active
 from app.services.notification_service import NotificationService
+from app.services.subscription_service import SubscriptionService
 
 router = APIRouter(prefix="/customer", tags=["customer-portal"])
 
@@ -197,4 +198,4 @@ def preview_customer_subscription(
         raise HTTPException(status_code=404, detail="客户订阅不存在")
     if not is_effectively_active(item):
         raise HTTPException(status_code=404, detail="客户订阅已失效")
-    return PackageService(db).preview(item.package)
+    return SubscriptionService(db).preview_customer(item)

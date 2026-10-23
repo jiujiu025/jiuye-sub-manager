@@ -216,9 +216,11 @@ const managerNavGroups = [
     title: '业务',
     items: [
       { path: '/manager', label: '经理工作台', icon: 'DataAnalysis' },
+      { path: '/health', label: '线路健康', icon: 'DataLine' },
       { path: '/customers', label: '我的客户', icon: 'UserFilled' },
        { path: '/subscriptions', label: '订阅管理', icon: 'List' },
-      { path: '/notifications', label: '通知中心', icon: 'Bell' }
+      { path: '/notifications', label: '通知中心', icon: 'Bell' },
+      { path: '/manager-logs', label: '系统日志', icon: 'Document' }
     ]
   }
 ]
@@ -274,7 +276,7 @@ async function readNotification(item) {
       source: '/sources',
       package: '/packages',
       customer: '/customers',
-      node: '/nodes',
+      node: isManager.value ? '/health' : '/nodes',
     }
     const targetPath = targetRoutes[item.target_type]
     router.push(targetPath && item.target_id ? { path: targetPath, query: { focus: String(item.target_id) } } : '/notifications')

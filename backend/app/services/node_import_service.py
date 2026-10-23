@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
@@ -40,6 +42,7 @@ def _to_custom_node(
     fingerprint: str,
     node_code: str,
     note: str | None = None,
+    expires_at: datetime | None = None,
 ) -> Node:
     return Node(
         node_code=node_code,
@@ -70,6 +73,7 @@ def _to_custom_node(
         node_fingerprint=fingerprint,
         metadata_json=parsed.metadata or None,
         note=note,
+        expires_at=expires_at,
         last_seen_at=utcnow(),
     )
 
@@ -88,10 +92,15 @@ class NodeImportService:
         fmt: str,
         admin: User,
         note: str | None = None,
+        expires_at: datetime | None = None,
     ) -> NodeImportResult:
         """导入外部节点内容；单个节点失败不影响其他节点。"""
 
         import_note = note.strip() if note and note.strip() else None
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        elif expires_at is not None:
+            expires_at = expires_at.astimezone(timezone.utc)
         entries, failures = self._parse_entries(content, fmt)
         seen: set[str] = set()
         success = 0
@@ -105,6 +114,9 @@ class NodeImportService:
             existing = self.node_repo.get_by_fingerprint(fingerprint)
             if existing is not None:
                 if existing.source_name == SELF_SOURCE_NAME:
+                    existing.expires_at = expires_at
+                    if import_note:
+                        existing.note = import_note
                     duplicate += 1
                     continue
                 # 自有节点优先级最高，替换低优先级的上游节点
@@ -121,6 +133,7 @@ class NodeImportService:
                     fingerprint,
                     allocate_node_code(self.db),
                     import_note,
+                    expires_at,
                 )
             )
             success += 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uuid import UUID
+from datetime import datetime, timezone
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -182,6 +183,13 @@ class NodeService:
             enabled=payload.enabled,
             node_fingerprint=fingerprint,
             note=payload.note.strip() if payload.note else None,
+            expires_at=(
+                payload.expires_at.replace(tzinfo=timezone.utc)
+                if payload.expires_at is not None and payload.expires_at.tzinfo is None
+                else payload.expires_at.astimezone(timezone.utc)
+                if payload.expires_at is not None
+                else None
+            ),
             last_seen_at=utcnow(),
         )
         self.db.add(node)
@@ -200,6 +208,13 @@ class NodeService:
         """更新节点并重新计算指纹；与其他节点冲突时拒绝。"""
 
         data = payload.model_dump(exclude_unset=True)
+        if "expires_at" in data and data["expires_at"] is not None:
+            value = data["expires_at"]
+            data["expires_at"] = (
+                value.replace(tzinfo=timezone.utc)
+                if value.tzinfo is None
+                else value.astimezone(timezone.utc)
+            )
         if "enabled" in data and data["enabled"] is None:
             raise BusinessError("节点字段 enabled 不能为 null")
         if node.node_category == "forwarded":

@@ -29,6 +29,7 @@ from app.schemas.subscription_line import (
 from app.services.manager_scope import subscription_manager_clause
 from app.services.package_service import PackageService
 from app.services.subscription_state import is_effectively_active
+from app.services.customer_subscription_lines import ensure_lines, is_expired
 
 
 class SubscriptionLineService:
@@ -166,14 +167,8 @@ class SubscriptionLineService:
                 subscription_manager_clause(manager_user_id)
             )
         subscriptions = list(self.db.scalars(statement).unique().all())
-        package_service = PackageService(self.db)
         all_nodes = list(self.db.scalars(select(Node)).all())
-        enabled_nodes = [node for node in all_nodes if node.enabled]
         node_cache = {node.id: node for node in all_nodes}
-        package_preview_cache = {
-            package.id: package_service.preview_from_nodes(package, enabled_nodes)
-            for package in {subscription.package for subscription in subscriptions}
-        }
         mappings = list(
             self.db.scalars(
                 select(ForwardedNodeMapping).where(ForwardedNodeMapping.status == "active")
@@ -184,16 +179,17 @@ class SubscriptionLineService:
         }
         lines: list[SubscriptionLineSummary] = []
         for subscription in subscriptions:
-            for preview in package_preview_cache.get(subscription.package.id, []):
-                node = node_cache.get(preview.id)
-                if node is None:
+            subscription_lines = ensure_lines(self.db, subscription)
+            for line in subscription_lines:
+                node = node_cache.get(line.node_id)
+                if node is None or not node.enabled:
                     continue
                 mapping = mapping_cache.get(node.id)
                 source = node_cache.get(mapping.source_node_id) if mapping else None
                 manager = subscription.manager or subscription.customer.manager
                 lines.append(
                     SubscriptionLineSummary(
-                        line_key=f"{subscription.id}:{node.id}",
+                        line_key=f"{subscription.id}:{line.id}",
                         line_code=f"L-{subscription.id}-{node.node_code or node.id}",
                         subscription_id=subscription.id,
                         customer_id=subscription.customer_id,
@@ -204,7 +200,7 @@ class SubscriptionLineService:
                         manager_username=manager.username if manager else None,
                         node_id=node.id,
                         node_code=node.node_code,
-                        node_name=preview.name,
+                        node_name=line.remark,
                         node_type=node.type,
                         node_country=node.country,
                         source_server=source.server if source else None,
@@ -212,8 +208,8 @@ class SubscriptionLineService:
                         forwarded_server=node.server,
                         started_at=subscription.started_at,
                         node_created_at=node.created_at,
-                        expires_at=subscription.expires_at,
-                        status=self._status(subscription),
+                        expires_at=line.expires_at,
+                        status=self._status(subscription, line, node),
                     )
                 )
         lines.sort(key=lambda item: (-item.node_created_at.timestamp(), item.line_code))
@@ -233,14 +229,16 @@ class SubscriptionLineService:
         ]
 
     @staticmethod
-    def _status(subscription: CustomerSubscription) -> str:
+    def _status(subscription: CustomerSubscription, line=None, node=None) -> str:
         if subscription.token and subscription.token.revoked_at:
             return "revoked"
         if subscription.status == "cancelled":
             return "cancelled"
         if subscription.status == "paused":
             return "paused"
-        return "active" if is_effectively_active(subscription) else "expired"
+        if not is_effectively_active(subscription):
+            return "expired"
+        return "expired" if line is not None and is_expired(line, node) else "active"
 
     def _line_link(self, row: SubscriptionLineSummary, node: Node | None = None) -> str:
         node = node or self.db.get(Node, row.node_id)

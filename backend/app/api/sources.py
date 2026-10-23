@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
@@ -118,10 +118,11 @@ def delete_source(
     source_id: int,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
-) -> None:
+) -> Response:
     """删除上游订阅及其节点。"""
 
     source = SourceRepository(db).get(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="上游订阅不存在")
     SourceService(db).delete(source, admin)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

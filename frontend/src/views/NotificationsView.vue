@@ -17,7 +17,12 @@
           <span class="notification-body"><span class="notification-title"><strong>{{ item.title }}</strong><el-tag v-if="item.priority === 'high'" size="small" type="danger">重要</el-tag></span><span class="notification-content">{{ item.content }}</span><small>{{ kindLabel(item.kind) }} · {{ formatTime(item.created_at) }}</small></span>
           <span v-if="!item.read_at" class="unread-mark" aria-label="未读" />
         </button>
-        <div class="notification-actions"><el-button v-if="!item.read_at" link type="primary" @click="read(item)">标记已读</el-button><el-button v-if="!item.archived_at" link @click="archive(item)">归档</el-button></div>
+        <div class="notification-actions">
+          <el-button link type="primary" @click="copyLookup(item)"><el-icon><DocumentCopy /></el-icon>复制定位信息</el-button>
+          <el-button v-if="item.target_type && item.target_id" link type="primary" @click="locate(item)"><el-icon><Aim /></el-icon>立即定位</el-button>
+          <el-button v-if="!item.read_at" link type="primary" @click="read(item)">标记已读</el-button>
+          <el-button v-if="!item.archived_at" link @click="archive(item)">归档</el-button>
+        </div>
       </div>
       <el-empty v-if="!loading && !items.length" description="当前筛选下暂无通知" :image-size="90" />
     </div>
@@ -30,6 +35,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { archiveNotification, listNotifications, markAllNotificationsRead, markNotificationRead } from '../api'
+import { formatApiDate } from '../utils/datetime'
 
 const router = useRouter()
 const items = ref([])
@@ -41,6 +47,7 @@ const pages = ref(1)
 const total = ref(0)
 const unreadCount = ref(0)
 const loading = ref(false)
+const isManager = localStorage.getItem('admin_role') === 'manager'
 
 async function load() {
   loading.value = true
@@ -59,13 +66,30 @@ async function markAll() { await markAllNotificationsRead(); items.value.forEach
 async function archive(item) { await archiveNotification(item.id); item.archived_at = new Date().toISOString(); if (status.value !== 'archived') items.value = items.value.filter((row) => row.id !== item.id); ElMessage.success('通知已归档') }
 async function open(item) {
   if (!item.read_at) await read(item)
-  const targetRoutes = { subscription: '/subscriptions', source: '/sources', package: '/packages', customer: '/customers', node: '/nodes' }
+  const targetRoutes = { subscription: '/subscriptions', source: '/sources', package: '/packages', customer: '/customers', node: isManager ? '/health' : '/nodes' }
   const targetPath = targetRoutes[item.target_type]
   if (targetPath && item.target_id) router.push({ path: targetPath, query: { focus: String(item.target_id) } })
 }
+async function copyLookup(item) {
+  const lineName = item.target_type === 'node'
+    ? item.content.match(/线路[「"']([^」"']+)[」"']/)?.[1]
+    : null
+  const lookup = lineName || item.content
+  try {
+    await navigator.clipboard.writeText(lookup)
+    ElMessage.success(lineName ? '线路名称已复制，可粘贴到资源池关键词中搜索' : '通知内容已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动选择通知内容复制')
+  }
+}
+function locate(item) {
+  const targetRoutes = { node: isManager ? '/health' : '/nodes', source: '/sources', package: '/packages', subscription: '/subscriptions', customer: '/customers' }
+  const targetPath = targetRoutes[item.target_type]
+  if (targetPath) router.push({ path: targetPath, query: { focus: String(item.target_id) } })
+}
 function kindLabel(value) { return ({ subscription_expiry: '订阅三天内到期', subscription_expiry_today: '订阅今日到期', subscription_assignment: '订阅分配', customer_assignment: '客户分配', manager_assignment: '经理变更', subscription_lifecycle: '订阅状态', source_sync: '来源同步', node_health: '节点健康', token: 'Token 安全', system: '系统通知' })[value] || '其他通知' }
 function iconFor(value) { return ({ subscription_expiry: 'WarningFilled', subscription_expiry_today: 'WarningFilled', subscription_assignment: 'Tickets', customer_assignment: 'UserFilled', manager_assignment: 'Switch', subscription_lifecycle: 'Operation', source_sync: 'Refresh', node_health: 'Connection', token: 'Lock', system: 'Bell' })[value] || 'Bell' }
-function formatTime(value) { return value ? new Date(value).toLocaleString() : '-' }
+function formatTime(value) { return formatApiDate(value) }
 onMounted(load)
 </script>
 

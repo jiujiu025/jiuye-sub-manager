@@ -31,6 +31,7 @@ class NodeSummary(ORMModel):
     created_at: datetime
     updated_at: datetime
     note: str | None
+    expires_at: datetime | None
     last_seen_at: datetime | None
     health_status: str
     health_checked_at: datetime | None
@@ -105,6 +106,7 @@ class NodeCreate(BaseModel):
     country: str | None = None
     enabled: bool = True
     note: str | None = Field(default=None, max_length=2000)
+    expires_at: datetime | None = None
     source_subtype: Literal["custom_url", "custom_manual", "custom_import"] = (
         "custom_manual"
     )
@@ -132,6 +134,7 @@ class NodeUpdate(BaseModel):
     country: str | None = None
     enabled: bool | None = None
     note: str | None = Field(default=None, max_length=2000)
+    expires_at: datetime | None = None
     source_subtype: Literal["custom_url", "custom_manual", "custom_import"] | None = None
 
 
@@ -149,6 +152,7 @@ class NodeImportRequest(BaseModel):
     source_subtype: Literal["custom_url", "custom_import"] = "custom_url"
     format: str = "auto"
     note: str | None = Field(default=None, max_length=2000)
+    expires_at: datetime | None = None
 
 
 class ImportFailure(BaseModel):
@@ -209,6 +213,7 @@ class NodeDetail(ORMModel):
     created_at: datetime
     updated_at: datetime
     note: str | None
+    expires_at: datetime | None
     last_seen_at: datetime | None
     health_status: str
     health_checked_at: datetime | None

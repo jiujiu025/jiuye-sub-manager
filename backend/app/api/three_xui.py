@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
@@ -110,12 +110,13 @@ def delete_server(
     server_id: int,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
-) -> None:
+) -> Response:
     service = ThreeXUIService(db)
     server = service.get_server(server_id)
     if server is None:
         raise HTTPException(status_code=404, detail="3x-ui 服务器不存在")
     service.delete_server(server, admin)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/tasks", response_model=list[ForwardTaskSummary])

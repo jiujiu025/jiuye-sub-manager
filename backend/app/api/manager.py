@@ -17,10 +17,11 @@ from app.schemas.manager import ManagerStats
 from app.schemas.auth import LoginRequest, TokenResponse, UserResponse
 from app.schemas.package import PreviewNode
 from app.schemas.node import NodeExportResponse
+from app.schemas.node import NodeSummary
 from app.services.customer_subscription_service import CustomerSubscriptionService
 from app.services.manager_service import ManagerService
-from app.services.package_service import PackageService
 from app.services.auth_service import AuthService
+from app.services.subscription_service import SubscriptionService
 from app.exporters import export_nodes
 from app.repositories.node_repo import NodeRepository
 from app.services.subscription_state import is_effectively_active
@@ -77,6 +78,16 @@ def get_manager_stats(
     return ManagerService(db).stats(user)
 
 
+@router.get("/health", response_model=list[NodeSummary])
+def get_manager_health(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_admin_or_manager),
+):
+    """健康大屏数据；经理只看到自己有效客户订阅中的线路。"""
+
+    return ManagerService(db).health_nodes(user)
+
+
 @router.get("/subscriptions/{subscription_id}/preview", response_model=list[PreviewNode])
 def preview_manager_subscription(
     subscription_id: int,
@@ -89,7 +100,7 @@ def preview_manager_subscription(
         raise HTTPException(status_code=404, detail="客户订阅不存在")
     if user.role == "manager" and not is_effectively_active(item):
         raise HTTPException(status_code=404, detail="客户订阅已失效")
-    return PackageService(db).preview(item.package)
+    return SubscriptionService(db).preview_customer(item)
 
 
 @router.get(
@@ -108,10 +119,12 @@ def export_manager_subscription_node(
     item = CustomerSubscriptionService(db).get(subscription_id, manager_id)
     if item is None or (user.role == "manager" and not is_effectively_active(item)):
         raise HTTPException(status_code=404, detail="客户订阅不存在或已失效")
-    preview = next((node for node in PackageService(db).preview(item.package) if node.id == node_id), None)
+    preview = next((node for node in SubscriptionService(db).preview_customer(item) if node.id == node_id), None)
     node = NodeRepository(db).get(node_id)
     if preview is None or node is None:
         raise HTTPException(status_code=404, detail="该节点不属于当前订阅")
+    if preview.name.endswith("已到期，请及时续费"):
+        raise HTTPException(status_code=404, detail="该线路已到期，不能分享真实线路")
     content, node_count = export_nodes(
         [(node, preview.name)], "uri", subscription_name=item.package.subscription_name
     )

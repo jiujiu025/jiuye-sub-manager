@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_admin
+from app.api.deps import get_current_admin, get_current_admin_or_manager
 from app.db import get_db
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
@@ -59,3 +59,25 @@ def get_logs(
     error_only = kind == "error"
     lines = read_log_tail(safe_page_size, error_only=error_only)
     return {"items": lines, "total": len(lines)}
+
+
+@router.get("/manager")
+def get_manager_logs(
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    manager: User = Depends(get_current_admin_or_manager),
+) -> dict:
+    """读取经理自己的操作审计日志；管理员可按同一接口查看自己的操作。"""
+
+    safe_page = max(page, 1)
+    safe_page_size = max(1, min(page_size, 100))
+    items, total = LogRepository(db).list_admin_logs(
+        safe_page,
+        safe_page_size,
+        admin_user_id=manager.id,
+    )
+    return {
+        "items": [AdminLogResponse.model_validate(item) for item in items],
+        "total": total,
+    }

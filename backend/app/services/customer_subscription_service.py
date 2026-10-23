@@ -32,6 +32,7 @@ from app.services.manager_scope import effective_manager_id, subscription_manage
 from app.services.package_service import normalize_expiration, subscription_url
 from app.services.notification_writer import create_admin_notifications
 from app.services.subscription_state import effective_subscription_status
+from app.services.customer_subscription_lines import ensure_lines
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -158,6 +159,8 @@ class CustomerSubscriptionService:
         )
         self.db.add(item)
         self.db.flush()
+        # 固化开通时的线路快照，使后续可以逐条设置到期时间。
+        ensure_lines(self.db, item)
         self._record_token_version(
             item,
             token,
@@ -533,6 +536,14 @@ class CustomerSubscriptionService:
             created_at=_utc(item.created_at),
             updated_at=_utc(item.updated_at),
         )
+
+    @staticmethod
+    def line_summaries(item: CustomerSubscription) -> list[dict]:
+        """返回订阅线路摘要；调用方需先确保线路明细已加载。"""
+
+        from app.services.customer_subscription_lines import to_summary
+
+        return [to_summary(line) for line in item.lines]
 
     @staticmethod
     def subscription_url(token: str) -> str:

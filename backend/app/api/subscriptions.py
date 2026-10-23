@@ -1,12 +1,13 @@
 """客户订阅管理接口。"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin, get_current_admin_or_manager
 from app.db import get_db
 from app.models.user import User
-from app.models.subscription import SubscriptionTokenVersion
+from app.models.subscription import CustomerSubscriptionLine, SubscriptionTokenVersion
 from app.schemas.subscription import (
     CustomerSubscriptionCreate,
     CustomerSubscriptionCreateResponse,
@@ -23,6 +24,9 @@ from app.services.customer_subscription_service import CustomerSubscriptionServi
 from app.services.package_service import display_subscription_name
 from app.services.subscription_state import is_effectively_active
 from app.services.subscription_service import SubscriptionService
+from app.services.customer_subscription_lines import ensure_lines, to_summary
+from app.services.package_service import normalize_expiration
+from app.schemas.subscription_line import CustomerSubscriptionLineUpdate
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
@@ -127,6 +131,56 @@ def lookup_subscription(
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
+
+
+@router.get("/{subscription_id}/lines")
+def list_subscription_lines(
+    subscription_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_or_manager),
+):
+    """查看客户订阅的逐条线路和独立到期时间。"""
+
+    manager_id = current_user.id if current_user.role == "manager" else None
+    item = CustomerSubscriptionService(db).get(subscription_id, manager_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="客户订阅不存在")
+    lines = ensure_lines(db, item)
+    db.commit()
+    return [to_summary(line) for line in lines]
+
+
+@router.put("/{subscription_id}/lines/{line_id}")
+def update_subscription_line(
+    subscription_id: int,
+    line_id: int,
+    payload: CustomerSubscriptionLineUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_or_manager),
+):
+    """修改单条线路到期时间；不影响同一订阅的其他线路。"""
+
+    manager_id = current_user.id if current_user.role == "manager" else None
+    item = CustomerSubscriptionService(db).get(subscription_id, manager_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="客户订阅不存在")
+    ensure_lines(db, item)
+    line = db.scalar(
+        select(CustomerSubscriptionLine).where(
+            CustomerSubscriptionLine.id == line_id,
+            CustomerSubscriptionLine.subscription_id == subscription_id,
+        )
+    )
+    if line is None:
+        raise HTTPException(status_code=404, detail="订阅线路不存在")
+    if "expires_at" not in payload.model_fields_set:
+        raise HTTPException(status_code=422, detail="请提供 expires_at，可传 null 表示长期有效")
+    line.expires_at = normalize_expiration(payload.expires_at)
+    line.status = "active"
+    db.commit()
+    SubscriptionService.invalidate_customer_subscription(subscription_id)
+    db.refresh(line)
+    return to_summary(line)
 
 
 @router.get("/{subscription_id}/token-history", response_model=list[SubscriptionTokenVersionSummary])

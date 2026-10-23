@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -17,6 +18,16 @@ from app.repositories.node_repo import NodeRepository
 from app.repositories.source_repo import SourceRepository
 from app.schemas.source import SourceCreate, SourceUpdate
 from app.services.subscription_service import SubscriptionService
+
+
+def normalize_source_expiration(value: datetime | None) -> datetime | None:
+    """把资源到期时间统一保存为 UTC。"""
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def validate_source_url(url: str) -> None:
@@ -61,6 +72,7 @@ class SourceService:
             enabled=payload.enabled,
             allow_empty_override=payload.allow_empty_override,
             fmt=payload.format,
+            expires_at=normalize_source_expiration(payload.expires_at),
         )
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
@@ -75,6 +87,7 @@ class SourceService:
     def update(self, source: Source, payload: SourceUpdate, admin: User) -> Source:
         data = payload.model_dump(exclude_unset=True)
         affected_package_ids: set[int] = set()
+        source_node_ids = {node.id for node in self.node_repo.list_by_source(source.id)}
         for key in ("name", "url"):
             if key in data and data[key] is None:
                 raise BusinessError(f"订阅字段 {key} 不能为 null")
@@ -86,6 +99,11 @@ class SourceService:
         if "format" in data and data["format"] != source.format:
             source.etag = None
             source.last_modified = None
+        if "expires_at" in data:
+            data["expires_at"] = normalize_source_expiration(data["expires_at"])
+            affected_package_ids = SubscriptionService.affected_package_ids_for_source(
+                self.db, source.name, source_node_ids, source_node_ids
+            )
         if "name" in data and data["name"] != source.name:
             if self.repo.get_by_name(data["name"]) is not None:
                 raise BusinessError("订阅名称已存在")
@@ -105,6 +123,9 @@ class SourceService:
                     ]
         for key, value in data.items():
             setattr(source, key, value)
+        if "expires_at" in data:
+            for node in self.node_repo.list_by_source(source.id):
+                node.expires_at = data["expires_at"]
         self.log_repo.create_admin_log(
             admin_user_id=admin.id,
             action="update_source",

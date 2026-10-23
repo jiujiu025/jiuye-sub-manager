@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin, get_current_admin_or_manager
@@ -211,8 +211,9 @@ def delete_package(
     package_id: int,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
-) -> None:
+) -> Response:
     """删除套餐。"""
 
     package = _get_package_or_404(db, package_id)
     PackageService(db).delete(package, admin)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

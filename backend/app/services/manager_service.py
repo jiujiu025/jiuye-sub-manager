@@ -7,13 +7,17 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
 
 from app.models.customer import Customer
 from app.models.subscription import CustomerSubscription
 from app.models.user import User
+from app.models.node import Node
 from app.schemas.manager import ManagerStats, RegionCount
 from app.services.manager_scope import subscription_manager_clause
 from app.services.subscription_state import active_subscription_clause
+from app.services.package_service import PackageService
+from app.schemas.node import NodeSummary
 
 
 class ManagerService:
@@ -78,3 +82,39 @@ class ManagerService:
             sales_total=sales_total,
             regions=regions,
         )
+
+    def health_nodes(self, user: User) -> list[NodeSummary]:
+        """返回经理名下有效客户订阅所包含的启用线路。"""
+
+        statement = (
+            select(CustomerSubscription)
+            .options(
+                joinedload(CustomerSubscription.customer),
+                joinedload(CustomerSubscription.package),
+                joinedload(CustomerSubscription.token),
+            )
+            .join(CustomerSubscription.customer)
+            .outerjoin(CustomerSubscription.token)
+            .where(active_subscription_clause(datetime.now(timezone.utc)))
+        )
+        if user.role != "admin":
+            statement = statement.where(subscription_manager_clause(user.id))
+        subscriptions = self.db.scalars(statement).all()
+        service = PackageService(self.db)
+        node_ids: set[int] = set()
+        package_cache: dict[int, list] = {}
+        for subscription in subscriptions:
+            if not subscription.package.enabled:
+                continue
+            previews = package_cache.setdefault(
+                subscription.package.id, service.preview(subscription.package)
+            )
+            node_ids.update(node.id for node in previews)
+        if not node_ids:
+            return []
+        nodes = self.db.scalars(
+            select(Node)
+            .where(Node.id.in_(node_ids), Node.enabled.is_(True))
+            .order_by(Node.id.asc())
+        ).all()
+        return [NodeSummary.model_validate(node) for node in nodes]

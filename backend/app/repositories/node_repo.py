@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import delete, func, or_, select, and_
 from sqlalchemy.orm import Session
 
@@ -117,7 +119,10 @@ class NodeRepository:
     ) -> list[Node]:
         """按套餐规则查询启用节点，关键词任一匹配即保留。"""
 
-        conditions = [Node.enabled.is_(True)]
+        conditions = [
+            Node.enabled.is_(True),
+            or_(Node.expires_at.is_(None), Node.expires_at > datetime.now(timezone.utc)),
+        ]
         source_conditions = []
         if sources:
             source_conditions.append(Node.source_name.in_(sources))

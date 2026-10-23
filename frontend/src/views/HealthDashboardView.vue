@@ -4,7 +4,7 @@
       <div class="health-title-block">
         <div class="health-live-line"><span class="live-dot" />线路信号台 <span class="live-rule" />{{ lastUpdated ? `最近采样 ${lastUpdated}` : '等待首轮采样' }}</div>
         <h2>线路健康大屏</h2>
-        <p>只显示启用中的导入外部线路，异常线路会自动排到最前。</p>
+        <p>{{ isManager ? '只显示自己客户订阅中的启用线路，异常线路会自动排到最前。' : '只显示启用中的导入外部线路，异常线路会自动排到最前。' }}</p>
       </div>
       <div class="health-actions">
         <label class="auto-refresh-control">
@@ -16,9 +16,9 @@
             <el-icon><Refresh /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-button class="manage-button" @click="router.push('/nodes')">
+        <el-button class="manage-button" @click="router.push(isManager ? '/subscriptions' : '/nodes')">
           <el-icon><Grid /></el-icon>
-          资源池
+          {{ isManager ? '我的订阅' : '资源池' }}
         </el-button>
       </div>
     </header>
@@ -175,10 +175,12 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { listNodes } from '../api'
+import { useRoute, useRouter } from 'vue-router'
+import { listManagerHealthNodes, listNodes } from '../api'
 
 const router = useRouter()
+const route = useRoute()
+const isManager = localStorage.getItem('admin_role') === 'manager'
 const rows = ref([])
 const loading = ref(true)
 const refreshing = ref(false)
@@ -263,7 +265,7 @@ const filteredRows = computed(() => {
         || (statusFilter.value === 'attention' && ['degraded', 'offline'].includes(status))
         || status === statusFilter.value
       const matchesProtocol = protocolFilter.value === 'all' || row.type === protocolFilter.value
-      const matchesKeyword = !keyword || [row.name, row.server, row.type].some((value) => String(value || '').toLowerCase().includes(keyword))
+      const matchesKeyword = !keyword || [row.id, row.node_code, row.name, row.server, row.type].some((value) => String(value || '').toLowerCase().includes(keyword))
       return matchesStatus && matchesProtocol && matchesKeyword
     })
     .sort((left, right) => {
@@ -296,13 +298,24 @@ async function loadNodes(options = {}) {
     let page = 1
     let total = 0
     do {
-      const { data } = await listNodes({ source_kind: 'custom', enabled: true, page, page_size: pageSize })
+      const { data } = isManager
+        ? await listManagerHealthNodes()
+        : await listNodes({ source_kind: 'custom', enabled: true, page, page_size: pageSize })
+      if (isManager) {
+        allRows.push(...data)
+        total = data.length
+        const focus = String(route.query.focus || '')
+        if (focus) search.value = focus
+        break
+      }
       allRows.push(...data.items)
       total = data.total
       page += 1
       if (!data.items.length) break
     } while (allRows.length < total)
     rows.value = allRows
+    const focus = String(route.query.focus || '')
+    if (focus) search.value = focus
     lastUpdated.value = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   } catch {
     error.value = rows.value.length ? '刷新失败，正在显示上一次采样结果' : '无法读取线路状态，请确认后端服务正在运行'
@@ -333,6 +346,7 @@ function setStatusFilter(value) {
 }
 
 function openNode(row) {
+  if (isManager) return
   router.push({ path: '/nodes', query: { keyword: row.name } })
 }
 

@@ -643,5 +643,6 @@ class SyncService:
             source_node_key=source_node_key,
             metadata_json=parsed.metadata or None,
             note=note,
+            expires_at=source.expires_at,
             last_seen_at=utcnow(),
         )

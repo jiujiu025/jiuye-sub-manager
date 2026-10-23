@@ -3,18 +3,19 @@
     <div class="page-header">
       <div>
         <h2 class="page-title">系统日志</h2>
-        <p class="page-subtitle">追踪同步、订阅访问、管理员操作与系统异常。</p>
+        <p class="page-subtitle">{{ isManager ? '查看自己的操作、客户和订阅处理记录。' : '追踪同步、订阅访问、管理员操作与系统异常。' }}</p>
       </div>
       <div class="page-header-mark"><el-icon><Document /></el-icon><span>ACTIVITY</span></div>
     </div>
     <div class="surface-card logs-surface">
       <el-tabs v-model="kind" @tab-change="load">
-        <el-tab-pane label="同步日志" name="sync" />
-        <el-tab-pane label="订阅请求" name="subscription" />
-        <el-tab-pane label="管理员操作" name="admin" />
-        <el-tab-pane label="3x-ui API" name="three_xui" />
-        <el-tab-pane label="系统日志" name="system" />
-        <el-tab-pane label="错误日志" name="error" />
+        <el-tab-pane v-if="isManager" label="我的操作" name="admin" />
+        <el-tab-pane v-if="!isManager" label="同步日志" name="sync" />
+        <el-tab-pane v-if="!isManager" label="订阅请求" name="subscription" />
+        <el-tab-pane v-if="!isManager" label="管理员操作" name="admin" />
+        <el-tab-pane v-if="!isManager" label="3x-ui API" name="three_xui" />
+        <el-tab-pane v-if="!isManager" label="系统日志" name="system" />
+        <el-tab-pane v-if="!isManager" label="错误日志" name="error" />
       </el-tabs>
 
     <el-table v-if="kind === 'sync'" :data="rows" v-loading="loading">
@@ -90,9 +91,12 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { getLogs } from '../api'
+import { getLogs, getManagerLogs } from '../api'
+import { formatApiDate } from '../utils/datetime'
 
 const kind = ref('sync')
+const isManager = localStorage.getItem('admin_role') === 'manager'
+if (isManager) kind.value = 'admin'
 const rows = ref([])
 const logLines = ref([])
 const total = ref(0)
@@ -105,7 +109,7 @@ const logText = computed(() => logLines.value.join('\n') || '暂无日志')
 async function load() {
   loading.value = true
   try {
-    const { data } = await getLogs({
+    const { data } = await (isManager ? getManagerLogs : getLogs)({
       kind: kind.value,
       page: page.value,
       page_size: pageSize
@@ -124,9 +128,7 @@ async function load() {
   }
 }
 
-function formatTime(value) {
-  return value ? new Date(value).toLocaleString() : '-'
-}
+function formatTime(value) { return formatApiDate(value) }
 
 function apiStage(detail) {
   if (!detail) return '-'

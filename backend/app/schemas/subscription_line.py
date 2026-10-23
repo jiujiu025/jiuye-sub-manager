@@ -33,6 +33,26 @@ class SubscriptionLineSummary(BaseModel):
     status: str
 
 
+class CustomerSubscriptionLineSummary(BaseModel):
+    """客户订阅线路的独立到期信息。"""
+
+    id: int
+    subscription_id: int
+    node_id: int | None
+    position: int
+    remark: str
+    expires_at: datetime | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CustomerSubscriptionLineUpdate(BaseModel):
+    """修改单条线路到期时间；传 null 表示长期有效。"""
+
+    expires_at: datetime | None = None
+
+
 class SubscriptionLinePage(BaseModel):
     items: list[SubscriptionLineSummary]
     total: int

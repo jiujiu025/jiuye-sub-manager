@@ -131,6 +131,10 @@ def get_subscription(
     if not package.enabled:
         raise HTTPException(status_code=403, detail="套餐已禁用")
 
+    if customer_subscription:
+        # 在缓存判断前补齐历史订阅线路，避免旧缓存绕过线路级到期规则。
+        service.ensure_customer_lines(customer_subscription)
+
     subscription_expires_at = customer_subscription.expires_at if customer_subscription else None
     is_expired = (
         service.is_expired_at(subscription_expires_at)
@@ -164,7 +168,11 @@ def get_subscription(
         )
 
     try:
-        content, node_count = service.generate(package, output_format)
+        content, node_count = (
+            service.generate_customer(customer_subscription, output_format)
+            if customer_subscription
+            else service.generate(package, output_format)
+        )
     except BusinessError as exc:
         service.log_subscription(package.id, "empty", 0, client_ip)
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

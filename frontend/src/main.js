@@ -13,6 +13,7 @@ import {
   DataAnalysis,
   DataLine,
   Document,
+  DocumentCopy,
   FolderOpened,
   Grid,
   List,
@@ -41,7 +42,7 @@ import router from './router'
 const app = createApp(App)
 const icons = {
   Aim, ArrowDown, ArrowRight, Bell, Briefcase, Check, Cloudy, Connection,
-  DataAnalysis, DataLine, Document, FolderOpened, Grid, List, Loading, Lock,
+  DataAnalysis, DataLine, Document, DocumentCopy, FolderOpened, Grid, List, Loading, Lock,
   Menu, Odometer, Operation, Plus, Refresh, Right, Search, Setting, Share,
   Switch, Tickets, User, UserFilled, WarningFilled
 }

@@ -24,6 +24,12 @@ class NodeHealthResponse(BaseModel):
     tls_latency_ms: int | None = None
 
 
+class NodeHealthBatchResponse(BaseModel):
+    """手动批量健康检测结果。"""
+
+    checked: int
+
+
 class NodeHealthSettings(BaseModel):
     """节点健康检测的运行时设置。"""
 

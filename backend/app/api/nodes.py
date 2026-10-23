@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,7 +24,7 @@ from app.schemas.node import (
     NodeUpdate,
     NodeUsageResponse,
 )
-from app.schemas.node_health import NodeHealthResponse
+from app.schemas.node_health import NodeHealthBatchResponse, NodeHealthResponse
 from app.schemas.geo import CountryResolveRequest, CountryResolveResponse
 from app.services.node_import_service import NodeImportService
 from app.services.node_service import NodeService
@@ -126,6 +126,7 @@ def import_nodes(
         payload.format,
         admin,
         payload.note,
+        payload.expires_at,
     )
 
 
@@ -238,6 +239,17 @@ def check_node_health(
     )
 
 
+@router.post("/health/check-all", response_model=NodeHealthBatchResponse)
+def check_all_node_health(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin),
+) -> NodeHealthBatchResponse:
+    """手动检测全部启用节点，包含上游订阅、外部导入和已转发节点。"""
+
+    checked = NodeHealthService(db).run_all(include_all=True)
+    return NodeHealthBatchResponse(checked=checked)
+
+
 @router.get("/{node_id}/usage", response_model=NodeUsageResponse)
 def get_node_usage(
     node_id: int,
@@ -313,10 +325,11 @@ def delete_node(
     node_id: int,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
-) -> None:
+) -> Response:
     """删除节点。"""
 
     node = NodeRepository(db).get(node_id)
     if node is None:
         raise HTTPException(status_code=404, detail="节点不存在")
     NodeService(db).delete(node, admin)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

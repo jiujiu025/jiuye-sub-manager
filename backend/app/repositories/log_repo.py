@@ -95,13 +95,20 @@ class LogRepository:
         return list(rows), total
 
     def list_admin_logs(
-        self, page: int = 1, page_size: int = 50, action: str | None = None
+        self,
+        page: int = 1,
+        page_size: int = 50,
+        action: str | None = None,
+        admin_user_id: int | None = None,
     ) -> tuple[list[AdminLog], int]:
         query = select(AdminLog)
         count_query = select(func.count()).select_from(AdminLog)
         if action:
             query = query.where(AdminLog.action == action)
             count_query = count_query.where(AdminLog.action == action)
+        if admin_user_id is not None:
+            query = query.where(AdminLog.admin_user_id == admin_user_id)
+            count_query = count_query.where(AdminLog.admin_user_id == admin_user_id)
         base = query.order_by(
             AdminLog.created_at.desc(), AdminLog.id.desc()
         )

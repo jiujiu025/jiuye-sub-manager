@@ -73,6 +73,25 @@ def test_manual_health_check_updates_node(
         db.close()
 
 
+def test_manual_all_health_endpoint_uses_full_scope(
+    client, auth_headers: dict[str, str], monkeypatch
+) -> None:
+    """资源池的全部检测接口必须调用全量模式并返回检测数量。"""
+
+    called = {}
+
+    def fake_run_all(self, *, include_all: bool = False) -> int:
+        called["include_all"] = include_all
+        return 7
+
+    monkeypatch.setattr(NodeHealthService, "run_all", fake_run_all)
+    response = client.post("/api/nodes/health/check-all", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"checked": 7}
+    assert called["include_all"] is True
+
+
 def test_health_alerts_after_threshold_and_recovers_without_duplicates(
     client, auth_headers: dict[str, str], monkeypatch
 ) -> None:
@@ -241,6 +260,37 @@ def test_run_all_only_checks_custom_nodes(
         upstream = db.get(Node, upstream_id)
         assert custom is not None and custom.health_status == "healthy"
         assert upstream is not None and upstream.health_status == "unknown"
+    finally:
+        db.close()
+
+
+def test_run_all_can_include_all_enabled_nodes(
+    client, auth_headers: dict[str, str], monkeypatch
+) -> None:
+    """手动全量检测可以覆盖上游节点，同时保留定时检测的默认范围。"""
+
+    custom_id = _create_node(client, auth_headers, "207")
+    upstream_id = _create_node(client, auth_headers, "208")
+    db = SessionLocal()
+    try:
+        upstream = db.get(Node, upstream_id)
+        assert upstream is not None
+        upstream.source_type = "upstream"
+        for existing in db.scalars(select(Node)).all():
+            if existing.id not in {custom_id, upstream_id}:
+                existing.enabled = False
+        db.commit()
+        monkeypatch.setattr(
+            node_health_service,
+            "probe_node",
+            lambda target, timeout: ProbeResult("healthy", "节点服务器可连接", 12),
+        )
+
+        assert NodeHealthService(db).run_all(include_all=True) == 2
+        custom = db.get(Node, custom_id)
+        upstream = db.get(Node, upstream_id)
+        assert custom is not None and custom.health_status == "healthy"
+        assert upstream is not None and upstream.health_status == "healthy"
     finally:
         db.close()
 
