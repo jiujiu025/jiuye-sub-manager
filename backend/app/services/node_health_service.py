@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
@@ -24,6 +24,7 @@ from app.models.base import utcnow
 from app.models.node import Node
 from app.exporters.singbox import SingboxExporter
 from app.services.notification_writer import create_admin_notifications
+from app.services.notification_delivery_service import NotificationDeliveryService
 from app.services.subscription_state import active_subscription_clause
 from app.models.subscription import CustomerSubscription
 from app.models.user import User
@@ -32,6 +33,9 @@ from app.services.package_service import PackageService
 from app.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
+
+# 仅用于健康状态判定，不代表代理服务商的 SLA；超过该值才标记为延迟异常。
+HEALTH_LATENCY_DEGRADED_MS = 3000
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,8 @@ class ProbeResult:
     tls_status: str = "unknown"
     tcp_latency_ms: int | None = None
     tls_latency_ms: int | None = None
+    udp_status: str = "not_applicable"
+    udp_latency_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -71,22 +77,46 @@ def _is_udp_node(node_type: str) -> bool:
     return node_type in {"hysteria", "hysteria2", "tuic"}
 
 
+def _udp_probe_status(target: NodeProbeTarget, status: str) -> str:
+    """仅对基于 UDP 的协议返回 UDP 分项状态。"""
+
+    return status if _is_udp_node(target.node_type) else "not_applicable"
+
+
+def _tcp_probe_status(target: NodeProbeTarget, status: str) -> str:
+    """仅对基于 TCP 的协议返回 TCP 分项状态。"""
+
+    return "not_applicable" if _is_udp_node(target.node_type) else status
+
+
 def _error_detail(exc: Exception) -> str:
     """把底层网络异常转换成适合展示和通知的中文。"""
 
     if isinstance(exc, socket.gaierror):
-        return "DNS 解析失败"
+        return "DNS 解析失败：服务器域名无法解析"
     if isinstance(exc, socket.timeout) or isinstance(exc, TimeoutError):
-        return "连接超时"
+        return "线路不通：连接超时，可能是端口不可达或出口丢包"
     if isinstance(exc, ConnectionRefusedError):
-        return "目标端口拒绝连接"
+        return "线路不通：目标端口拒绝连接，可能是端口未开放或防火墙拦截"
     if isinstance(exc, ConnectionResetError):
-        return "连接被目标端重置"
+        return "线路不通：连接被目标端重置，可能是落地服务拒绝了握手"
     if isinstance(exc, ssl.SSLCertVerificationError):
-        return "TLS 证书验证失败"
+        return "TLS 握手异常：证书验证失败，请检查 SNI、证书或安全设置"
     if isinstance(exc, ssl.SSLError):
-        return "TLS 握手失败"
-    return "连接失败"
+        return "TLS 握手异常：TLS 协商失败，请检查 SNI、证书或安全设置"
+    return "线路不通：连接失败，请检查服务器地址、端口和防火墙"
+
+
+def _latency_detail(latency_ms: int | None) -> str:
+    """把延迟数值转换成明确的运营提示。"""
+
+    if latency_ms is None:
+        return ""
+    if latency_ms >= HEALTH_LATENCY_DEGRADED_MS:
+        return f"延迟异常：本次探测耗时 {latency_ms} ms，超过 {HEALTH_LATENCY_DEGRADED_MS} ms"
+    if latency_ms >= 1000:
+        return f"延迟偏高：本次探测耗时 {latency_ms} ms"
+    return f"延迟正常：本次探测耗时 {latency_ms} ms"
 
 
 def probe_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeResult:
@@ -95,7 +125,12 @@ def probe_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeResult:
     settings = get_settings()
     executable = shutil.which(settings.sing_box_path) or settings.sing_box_path
     if not shutil.which(executable) and not os.path.isfile(executable):
-        return ProbeResult("unknown", "完整检测内核未安装，请安装 sing-box", None)
+        return ProbeResult(
+            "unknown",
+            "本机探测器不可用：完整检测内核未安装，请安装 sing-box",
+            None,
+            udp_status=_udp_probe_status(target, "unknown"),
+        )
 
     started = time.perf_counter()
     deadline = started + max(float(timeout_seconds), 1.0)
@@ -124,7 +159,12 @@ def probe_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeResult:
         try:
             remaining = _remaining_seconds(deadline)
             if remaining <= 0:
-                return ProbeResult("degraded", "节点检测总超时", None)
+                return ProbeResult(
+                    "degraded",
+                    "本机探测器超时：还未开始连接线路，检测总时限已用尽",
+                    None,
+                    udp_status=_udp_probe_status(target, "failed"),
+                )
             checked = subprocess.run(
                 [executable, "check", "-c", config_path],
                 capture_output=True,
@@ -133,14 +173,25 @@ def probe_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeResult:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return ProbeResult("degraded", "协议配置校验超时", None)
+            return ProbeResult(
+                "degraded",
+                "本机探测器异常：协议配置校验超时",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         except OSError:
-            return ProbeResult("degraded", "完整检测内核无法启动", None)
+            return ProbeResult(
+                "degraded",
+                "本机探测器异常：完整检测内核无法启动",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         if checked.returncode != 0:
             return ProbeResult(
                 "degraded",
-                f"协议配置校验失败：{_classify_process_error(checked.stderr)}",
+                f"协议配置异常：{_classify_process_error(checked.stderr)}",
                 None,
+                udp_status=_udp_probe_status(target, "failed"),
             )
 
         # 使用系统分配的本地端口，避免多节点并发检测时端口冲突。
@@ -152,17 +203,37 @@ def probe_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeResult:
                 text=True,
             )
         except OSError:
-            return ProbeResult("degraded", "完整检测内核无法启动", None)
+            return ProbeResult(
+                "degraded",
+                "本机探测器异常：完整检测内核无法启动",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         try:
             remaining = _remaining_seconds(deadline)
             if remaining <= 0:
-                return ProbeResult("offline", "节点检测总超时", None)
+                return ProbeResult(
+                    "offline",
+                    "线路探测超时：未能启动本地代理入站",
+                    None,
+                    udp_status=_udp_probe_status(target, "failed"),
+                )
             ready, startup_error = _wait_for_proxy(process, local_port, remaining)
             if not ready:
-                return ProbeResult("degraded", startup_error, None)
+                return ProbeResult(
+                    "degraded",
+                    startup_error,
+                    None,
+                    udp_status=_udp_probe_status(target, "failed"),
+                )
             remaining = _remaining_seconds(deadline)
             if remaining <= 0:
-                return ProbeResult("offline", "节点检测总超时", None)
+                return ProbeResult(
+                    "offline",
+                    "线路探测超时：本地代理启动后没有剩余检测时间",
+                    None,
+                    udp_status=_udp_probe_status(target, "failed"),
+                )
             with httpx.Client(
                 proxy=f"http://127.0.0.1:{local_port}",
                 timeout=remaining,
@@ -171,33 +242,61 @@ def probe_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeResult:
             ) as client:
                 response = client.get(settings.health_test_url)
             if response.status_code >= 400:
+                latency_ms = _latency_ms(started)
                 return ProbeResult(
                     "degraded",
-                    f"代理已建立，但测试网址返回 HTTP {response.status_code}",
-                    _latency_ms(started),
-                    "passed",
+                    f"测试目标异常：代理通道已建立，但测试网址返回 HTTP {response.status_code}；"
+                    f"{_latency_detail(latency_ms)}",
+                    latency_ms,
+                    _tcp_probe_status(target, "passed"),
                     _tls_probe_status(target.outbound),
                     None,
-                    _latency_ms(started),
+                    latency_ms,
+                    _udp_probe_status(target, "passed"),
+                    latency_ms if _is_udp_node(target.node_type) else None,
                 )
             latency_ms = _latency_ms(started)
+            latency_detail = _latency_detail(latency_ms)
+            status = "degraded" if latency_ms >= HEALTH_LATENCY_DEGRADED_MS else "healthy"
             return ProbeResult(
-                "healthy",
-                f"完整代理访问成功，HTTP {response.status_code}",
+                status,
+                f"线路可用：完整代理访问成功，HTTP {response.status_code}；{latency_detail}",
                 latency_ms,
-                "passed",
+                _tcp_probe_status(target, "passed"),
                 _tls_probe_status(target.outbound),
                 None,
                 latency_ms,
+                _udp_probe_status(target, "passed"),
+                latency_ms if _is_udp_node(target.node_type) else None,
             )
         except httpx.TimeoutException:
-            return ProbeResult("offline", "代理已启动，但访问测试网址超时", None)
+            return ProbeResult(
+                "offline",
+                "测试目标超时：代理已启动，但测试网址没有响应；无法仅凭本次探测断定是线路丢包还是测试目标不可达",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         except httpx.ProxyError:
-            return ProbeResult("degraded", "本地代理已启动，但代理请求失败", None)
+            return ProbeResult(
+                "degraded",
+                "代理转发失败：本地代理已启动，但请求没有通过节点转发",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         except httpx.HTTPError as exc:
-            return ProbeResult("degraded", f"代理请求失败：{_short_error(str(exc))}", None)
+            return ProbeResult(
+                "degraded",
+                f"测试目标异常：代理请求失败，{_short_error(str(exc))}",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         except OSError as exc:
-            return ProbeResult("offline", f"检测进程启动失败：{_short_error(str(exc))}", None)
+            return ProbeResult(
+                "offline",
+                f"本机探测器异常：检测进程启动失败，{_short_error(str(exc))}",
+                None,
+                udp_status=_udp_probe_status(target, "failed"),
+            )
         finally:
             _terminate_process(process)
 
@@ -208,10 +307,11 @@ def probe_basic_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeRe
     if _is_udp_node(target.node_type):
         return ProbeResult(
             "unknown",
-            "UDP 节点暂未执行 TCP/TLS 探测",
+            "检测范围有限：基础模式无法确认 UDP 远端响应，请切换完整模式进行 UDP 协议探测",
             None,
-            "unknown",
-            "unknown",
+            "not_applicable",
+            "not_applicable",
+            udp_status="unknown",
         )
 
     started = time.perf_counter()
@@ -268,13 +368,13 @@ def probe_basic_node(target: NodeProbeTarget, timeout_seconds: float) -> ProbeRe
                 last_tls_status = "not_applicable"
 
             latency_ms = max(1, round((time.perf_counter() - started) * 1000))
-            detail = "TCP 连接成功"
+            detail = f"线路可用：TCP 连接成功；{_latency_detail(latency_ms)}"
             if last_tls_status == "passed":
-                detail += "，TLS 握手成功"
+                detail += "；TLS 握手成功"
             elif last_tls_status == "unknown" and reality_enabled:
-                detail += "，Reality 握手需完整模式验证"
+                detail += "；Reality 握手需完整模式验证"
             return ProbeResult(
-                "healthy",
+                "degraded" if latency_ms >= HEALTH_LATENCY_DEGRADED_MS else "healthy",
                 detail,
                 latency_ms,
                 "passed",
@@ -376,44 +476,14 @@ def _classify_process_error(message: str) -> str:
     text = _short_error(message)
     lowered = text.lower()
     if "authentication" in lowered or "unauthorized" in lowered:
-        return "认证失败（UUID、密码或用户信息错误）"
+        return "凭证异常：UUID、密码或用户信息错误"
     if "tls" in lowered or "reality" in lowered or "certificate" in lowered:
-        return "TLS/Reality 握手失败（SNI、证书或 Reality 参数错误）"
+        return "TLS/Reality 握手异常：SNI、证书或 Reality 参数错误"
     if "websocket" in lowered or "transport" in lowered or "grpc" in lowered:
-        return "传输层握手失败（Path、Host 或传输参数错误）"
+        return "传输层握手异常：Path、Host 或传输参数错误"
     if "timeout" in lowered or "timed out" in lowered:
-        return "节点连接超时"
-    return "协议进程异常退出，请检查节点协议参数"
-
-
-class HealthAlertDispatcher:
-    """按环境变量配置发送 Telegram 和企业微信告警。"""
-
-    def dispatch(self, content: str) -> None:
-        settings = get_settings()
-        has_telegram = bool(settings.telegram_bot_token and settings.telegram_chat_id)
-        has_wecom = bool(settings.wecom_bot_webhook)
-        if not has_telegram and not has_wecom:
-            return
-        with httpx.Client(timeout=10, trust_env=False) as client:
-            if has_telegram:
-                try:
-                    response = client.post(
-                        f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
-                        json={"chat_id": settings.telegram_chat_id, "text": content},
-                    )
-                    response.raise_for_status()
-                except Exception:
-                    logger.exception("Telegram 节点健康告警发送失败")
-            if settings.wecom_bot_webhook:
-                try:
-                    response = client.post(
-                        settings.wecom_bot_webhook,
-                        json={"msgtype": "text", "text": {"content": content}},
-                    )
-                    response.raise_for_status()
-                except Exception:
-                    logger.exception("企业微信节点健康告警发送失败")
+        return "线路不通：节点连接超时"
+    return "本机探测器异常：协议进程异常退出，请检查节点协议参数"
 
 
 class NodeHealthService:
@@ -446,7 +516,13 @@ class NodeHealthService:
         settings = SettingsService(self.db).get()
         conditions = [Node.enabled.is_(True)]
         if not include_all:
-            conditions.append(Node.source_type == "custom")
+            # 兼容历史外部节点：旧数据可能没有 source_type，但 node_category 已经是 external。
+            conditions.append(
+                and_(
+                    Node.node_category == "external",
+                    or_(Node.source_type.is_(None), Node.source_type != "upstream"),
+                )
+            )
         nodes = list(self.db.scalars(select(Node).where(*conditions)).all())
         targets: dict[int, NodeProbeTarget] = {}
         results: dict[int, ProbeResult] = {}
@@ -510,6 +586,8 @@ class NodeHealthService:
         node.health_tls_status = result.tls_status
         node.health_tcp_latency_ms = result.tcp_latency_ms
         node.health_tls_latency_ms = result.tls_latency_ms
+        node.health_udp_status = result.udp_status
+        node.health_udp_latency_ms = result.udp_latency_ms
         alerts: list[HealthAlert] = []
 
         if result.status == "unknown":
@@ -614,6 +692,6 @@ class NodeHealthService:
     def _dispatch(self, alerts: list[HealthAlert]) -> None:
         if not alerts:
             return
-        dispatcher = HealthAlertDispatcher()
-        for alert in alerts:
-            dispatcher.dispatch(f"【{alert.title}】\n{alert.content}")
+        # 健康告警已经写入站内通知，统一交给通知投递服务读取网页保存的渠道配置。
+        # 这样 Telegram/微信公众号与到期提醒使用同一套重试、去重和脱敏逻辑。
+        NotificationDeliveryService(self.db).dispatch_pending()

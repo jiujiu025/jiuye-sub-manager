@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +15,9 @@ from app.models.subscription import CustomerSubscription
 from app.services.manager_scope import effective_manager_id
 from app.services.subscription_state import active_subscription_clause
 from app.models.user import User
+
+
+DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -59,7 +63,9 @@ class NotificationService:
             customer_account_id = subscription.customer.account_user_id
             if customer_account_id is not None and subscription.customer.is_active:
                 recipients.append(customer_account_id)
-            is_today = expires_at.date() == current.date()
+            display_expiry = expires_at.astimezone(DISPLAY_TIMEZONE)
+            display_current = current.astimezone(DISPLAY_TIMEZONE)
+            is_today = display_expiry.date() == display_current.date()
             notification_kind = (
                 "subscription_expiry_today" if is_today else "subscription_expiry"
             )
@@ -83,7 +89,7 @@ class NotificationService:
                                 title=title,
                                 content=(
                                     f"客户「{subscription.customer.name}」的套餐「{subscription.package.name}」"
-                                    f"将于 {expires_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC 到期。"
+                                    f"将于北京时间 {display_expiry.strftime('%Y-%m-%d %H:%M')} 到期。"
                                 ),
                                 target_type="subscription",
                                 target_id=subscription.id,

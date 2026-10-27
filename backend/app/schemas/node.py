@@ -41,6 +41,8 @@ class NodeSummary(ORMModel):
     health_tls_status: str
     health_tcp_latency_ms: int | None
     health_tls_latency_ms: int | None
+    health_udp_status: str
+    health_udp_latency_ms: int | None
     uuid: str | None = Field(default=None, exclude=True)
     password: str | None = Field(default=None, exclude=True)
     username: str | None = Field(default=None, exclude=True)
@@ -223,6 +225,8 @@ class NodeDetail(ORMModel):
     health_tls_status: str
     health_tcp_latency_ms: int | None
     health_tls_latency_ms: int | None
+    health_udp_status: str
+    health_udp_latency_ms: int | None
 
 
 class NodeUsagePackage(BaseModel):

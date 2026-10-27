@@ -91,6 +91,80 @@ def test_list_nodes_with_filter(client: TestClient, auth_headers: dict[str, str]
     assert response.json()["total"] >= 1
 
 
+def test_list_nodes_filters_health_status(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """资源池应在数据库分页前按健康状态筛选，异常线路包含异常和离线。"""
+
+    statuses = ["healthy", "degraded", "offline", "unknown"]
+    db = SessionLocal()
+    try:
+        nodes = []
+        for index, health_status in enumerate(statuses, start=1):
+            server = f"health-filter-{index}.example.com"
+            uuid = f"00000000-0000-4000-8000-0000000002{index:02d}"
+            nodes.append(
+                Node(
+                    source_id=None,
+                    source_name="健康筛选来源",
+                    original_name=f"健康筛选-{health_status}",
+                    name=f"健康筛选-{health_status}",
+                    type="vless",
+                    server=server,
+                    port=443,
+                    uuid=uuid,
+                    health_status=health_status,
+                    node_fingerprint=build_node_fingerprint(
+                        node_type="vless",
+                        server=server,
+                        port=443,
+                        uuid=uuid,
+                    ),
+                )
+            )
+        db.add_all(nodes)
+        db.commit()
+    finally:
+        db.close()
+
+    for health_status in statuses:
+        response = client.get(
+            "/api/nodes",
+            params={"health_status": health_status},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert all(
+            item["health_status"] == health_status
+            for item in response.json()["items"]
+            if item["name"].startswith("健康筛选-")
+        )
+
+    attention = client.get(
+        "/api/nodes",
+        params={"health_status": "attention", "page_size": 100},
+        headers=auth_headers,
+    )
+    assert attention.status_code == 200
+    attention_items = [
+        item
+        for item in attention.json()["items"]
+        if item["name"].startswith("健康筛选-")
+    ]
+    assert {item["health_status"] for item in attention_items} == {"degraded", "offline"}
+
+    paged = client.get(
+        "/api/nodes",
+        params={"health_status": "attention", "page": 2, "page_size": 1},
+        headers=auth_headers,
+    )
+    assert paged.status_code == 200
+    assert paged.json()["total"] >= 2
+
+    unauthenticated = client.get("/api/nodes?health_status=attention")
+    assert unauthenticated.status_code == 401
+
+
 def test_list_nodes_separates_subscription_and_custom_nodes(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -136,6 +210,35 @@ def test_list_nodes_separates_subscription_and_custom_nodes(
     assert custom_nodes.status_code == 200
     assert any(item["source_id"] == source_id for item in subscription_nodes.json()["items"])
     assert all(item["source_id"] is None for item in custom_nodes.json()["items"])
+
+    db = SessionLocal()
+    try:
+        # 历史手工节点可能没有 source_type，仍应归入外部节点分类。
+        db.add(
+            Node(
+                source_name="导入外部节点",
+                source_type=None,
+                node_category="external",
+                original_name="历史外部节点",
+                name="历史外部节点",
+                type="vless",
+                server="legacy-external.example.com",
+                port=443,
+                uuid="00000000-0000-4000-0000-000000000012",
+                node_fingerprint=build_node_fingerprint(
+                    node_type="vless",
+                    server="legacy-external.example.com",
+                    port=443,
+                    uuid="00000000-0000-4000-0000-000000000012",
+                ),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    custom_nodes = client.get("/api/nodes?source_kind=custom", headers=auth_headers)
+    assert any(item["name"] == "历史外部节点" for item in custom_nodes.json()["items"])
 
 
 def test_create_self_vless_node(client: TestClient, auth_headers: dict[str, str]) -> None:
@@ -255,6 +358,8 @@ def test_node_health_returns_unknown_without_active_probe(
     health = client.get(f"/api/nodes/{node_id}/health", headers=auth_headers)
     assert health.status_code == 200
     assert health.json()["status"] == "unknown"
+    assert health.json()["udp_status"] == "unknown"
+    assert health.json()["udp_latency_ms"] is None
     assert client.get("/api/nodes/999999/health", headers=auth_headers).status_code == 404
 
 

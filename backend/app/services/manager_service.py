@@ -27,9 +27,12 @@ class ManagerService:
     def stats(self, user: User) -> ManagerStats:
         manager_id = None if user.role == "admin" else user.id
         now = datetime.now(timezone.utc)
-        customer_statement = select(func.count(Customer.id))
+        customer_statement = select(func.count(func.distinct(Customer.id))).select_from(Customer)
         if manager_id is not None:
-            customer_statement = customer_statement.where(Customer.manager_user_id == manager_id)
+            customer_statement = customer_statement.outerjoin(
+                CustomerSubscription,
+                CustomerSubscription.customer_id == Customer.id,
+            ).where(subscription_manager_clause(manager_id))
         customer_count = int(self.db.scalar(customer_statement) or 0)
 
         subscription_statement = select(func.count(CustomerSubscription.id)).join(

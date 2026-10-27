@@ -22,6 +22,8 @@ class NodeHealthResponse(BaseModel):
     tls_status: str = "unknown"
     tcp_latency_ms: int | None = None
     tls_latency_ms: int | None = None
+    udp_status: str = "unknown"
+    udp_latency_ms: int | None = None
 
 
 class NodeHealthBatchResponse(BaseModel):

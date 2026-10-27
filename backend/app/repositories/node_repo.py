@@ -22,6 +22,7 @@ class NodeRepository:
         source_name: str | None = None,
         node_type: str | None = None,
         country: str | None = None,
+        health_status: str | None = None,
         keyword: str | None = None,
         enabled: bool | None = None,
         page: int = 1,
@@ -44,7 +45,7 @@ class NodeRepository:
                 and_(
                     Node.node_category == "external",
                     Node.source_id.is_(None),
-                    Node.source_type != "upstream",
+                    or_(Node.source_type.is_(None), Node.source_type != "upstream"),
                 )
             )
         elif source_kind == "forwarded":
@@ -55,6 +56,10 @@ class NodeRepository:
             conditions.append(Node.type == node_type)
         if country:
             conditions.append(Node.country == country)
+        if health_status == "attention":
+            conditions.append(Node.health_status.in_(["degraded", "offline"]))
+        elif health_status:
+            conditions.append(Node.health_status == health_status)
         if keyword:
             lowered = keyword.strip().lower()
             if not lowered:

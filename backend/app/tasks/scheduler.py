@@ -176,7 +176,8 @@ class SyncScheduler:
             return
         db = SessionLocal()
         try:
-            NodeHealthService(db).run_all()
+            # 定时任务检测资源池中的全部启用节点，包含上游订阅节点和已转发节点。
+            NodeHealthService(db).run_all(include_all=True)
         except Exception:
             logger.exception("定时节点健康检测失败")
         finally:

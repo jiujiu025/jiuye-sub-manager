@@ -76,6 +76,10 @@ class Node(Base):
     )
     health_tcp_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     health_tls_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    health_udp_status: Mapped[str] = mapped_column(
+        String(16), default="unknown", nullable=False
+    )
+    health_udp_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     health_failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     health_success_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     health_incident_started_at: Mapped[datetime | None] = mapped_column(

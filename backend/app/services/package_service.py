@@ -24,6 +24,7 @@ from app.models.package import Package, PackageRule
 from app.models.customer import Customer
 from app.models.node import Node
 from app.models.subscription import CustomerSubscription
+from app.models.subscription import SubscriptionToken
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
@@ -499,6 +500,161 @@ class PackageService:
         """按需解密当前 Token；列表和详情不自动暴露该值。"""
 
         return subscription_url_for_package(package)
+
+    def lookup_by_subscription(self, value: str):
+        """按完整订阅链接、Token 或 Token 前缀查找套餐摘要。
+
+        完整 Token 仍然使用哈希精确匹配；只有不少于四位的前缀才允许模糊匹配，
+        避免过短输入返回大量无关结果。响应只包含 Token 前缀，不解密或回显明文 Token。
+        """
+
+        from app.schemas.package import PackageLookupItem
+        from app.services.subscription_service import SubscriptionService
+
+        token = SubscriptionService.extract_lookup_token(value)
+        if not token:
+            return []
+
+        exact = SubscriptionService(self.db).find_subscription_by_token(value)
+        if exact is not None:
+            kind, item = exact
+            if kind == "package":
+                return [self._lookup_item(item, PackageLookupItem, "package")]
+            is_history = kind.endswith("history")
+            subscription = item.subscription if is_history else item
+            return [
+                self._lookup_item(
+                    subscription.package,
+                    PackageLookupItem,
+                    "customer_subscription_history" if is_history else "customer_subscription",
+                    customer_id=subscription.customer_id,
+                    customer_name=subscription.customer.name,
+                    manager_username=(
+                        subscription.manager.username if subscription.manager else None
+                    ),
+                    subscription_id=subscription.id,
+                    token_prefix=(item.token_prefix if is_history else subscription.token.token_prefix),
+                    expires_at=subscription.expires_at,
+                    status="历史 Token" if is_history else self._subscription_status(subscription),
+                    created_at=item.created_at if is_history else subscription.created_at,
+                    updated_at=subscription.updated_at,
+                )
+            ]
+
+        if len(token) < 4 or len(token) > 8:
+            return []
+
+        package_candidates = list(
+            self.db.scalars(
+                select(Package)
+                .options(joinedload(Package.owner_customer))
+                .where(Package.token_prefix.like(f"{token}%"))
+                .order_by(Package.created_at.desc())
+            ).all()
+        )
+        results = [
+            self._lookup_item(package, PackageLookupItem, "package_prefix")
+            for package in package_candidates
+            if package.token_prefix.startswith(token)
+        ]
+
+        customer_tokens = list(
+            self.db.scalars(
+                select(SubscriptionToken)
+                .options(
+                    joinedload(SubscriptionToken.subscription)
+                    .joinedload(CustomerSubscription.package)
+                    .joinedload(Package.owner_customer),
+                    joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.customer),
+                    joinedload(SubscriptionToken.subscription).joinedload(CustomerSubscription.manager),
+                )
+                .where(SubscriptionToken.token_prefix.like(f"{token}%"))
+                .order_by(SubscriptionToken.created_at.desc())
+            ).all()
+        )
+        results.extend(
+            self._lookup_item(
+                item.subscription.package,
+                PackageLookupItem,
+                "customer_subscription_prefix",
+                customer_id=item.subscription.customer_id,
+                customer_name=item.subscription.customer.name,
+                manager_username=(
+                    item.subscription.manager.username if item.subscription.manager else None
+                ),
+                subscription_id=item.subscription.id,
+                token_prefix=item.token_prefix,
+                expires_at=item.subscription.expires_at,
+                status=self._subscription_status(item.subscription),
+                updated_at=item.subscription.updated_at,
+            )
+            for item in customer_tokens
+            if item.token_prefix.startswith(token)
+        )
+        return results
+
+    @staticmethod
+    def _subscription_status(subscription: CustomerSubscription) -> str:
+        """返回查找结果使用的客户订阅状态。"""
+
+        if subscription.token is not None and subscription.token.revoked_at is not None:
+            return "已撤销"
+        if subscription.status == "cancelled":
+            return "已取消"
+        if subscription.status == "paused":
+            return "已暂停"
+        expires_at = expiration_for_response(subscription.expires_at)
+        if expires_at is not None and expires_at <= utcnow():
+            return "已到期"
+        return "生效中"
+
+    @staticmethod
+    def _lookup_item(
+        package: Package,
+        schema,
+        match_kind: str,
+        *,
+        customer_id: int | None = None,
+        customer_name: str | None = None,
+        manager_username: str | None = None,
+        subscription_id: int | None = None,
+        token_prefix: str | None = None,
+        status: str | None = None,
+        expires_at=None,
+        created_at=None,
+        updated_at=None,
+    ):
+        """将套餐或客户订阅匹配结果转换为不含明文 Token 的摘要。"""
+
+        package_expires_at = expiration_for_response(package.expires_at)
+        if status is None:
+            if package.token_revoked_at is not None:
+                status = "已撤销"
+            elif not package.enabled:
+                status = "已停用"
+            elif package_expires_at is not None and package_expires_at <= utcnow():
+                status = "已到期"
+            else:
+                status = "生效中"
+        return schema(
+            package_id=package.id,
+            package_name=package.name,
+            subscription_name=display_subscription_name(package),
+            customer_id=customer_id,
+            customer_name=customer_name,
+            manager_username=manager_username,
+            subscription_id=subscription_id,
+            match_kind=match_kind,
+            token_prefix=token_prefix or package.token_prefix,
+            status=status,
+            expires_at=(
+                expiration_for_response(expires_at)
+                if expires_at is not None
+                else package_expires_at
+            ),
+            created_at=created_at or package.created_at,
+            updated_at=updated_at or package.updated_at,
+        )
 
     def _validate_owner(self, owner_user_id: int | None) -> None:
         """确保套餐只能归属给存在且可登录的普通用户。"""

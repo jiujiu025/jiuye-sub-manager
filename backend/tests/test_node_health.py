@@ -233,6 +233,96 @@ def test_missing_singbox_is_unknown(monkeypatch) -> None:
     assert result.status == "unknown"
 
 
+def test_basic_udp_probe_is_explicitly_limited() -> None:
+    """基础模式不能伪造 UDP 远端可用，必须明确提示切换完整模式。"""
+
+    target = NodeProbeTarget(
+        node_id=1,
+        name="UDP 基础检测节点",
+        node_type="hysteria2",
+        server="udp.example.com",
+        port=443,
+        outbound={"type": "hysteria2"},
+    )
+
+    result = node_health_service.probe_basic_node(target, 1)
+
+    assert result.status == "unknown"
+    assert result.tcp_status == "not_applicable"
+    assert result.tls_status == "not_applicable"
+    assert result.udp_status == "unknown"
+    assert "UDP" in result.detail
+    assert "完整模式" in result.detail
+
+
+def test_full_udp_probe_records_udp_success(monkeypatch) -> None:
+    """完整模式访问测试网址成功时，UDP 协议应记录真实的通过结果。"""
+
+    class FakeProcess:
+        stderr = None
+
+        def poll(self):
+            return None
+
+    class FakeResponse:
+        status_code = 204
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return FakeResponse()
+
+    monkeypatch.setattr(node_health_service, "get_settings", lambda: SimpleNamespace(
+        sing_box_path="sing-box",
+        health_test_url="https://health.example.com/",
+    ))
+    monkeypatch.setattr(node_health_service.shutil, "which", lambda _: "sing-box")
+    monkeypatch.setattr(node_health_service.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=0,
+        stderr="",
+    ))
+    monkeypatch.setattr(node_health_service.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(node_health_service, "_wait_for_proxy", lambda *args: (True, ""))
+    monkeypatch.setattr(node_health_service, "_terminate_process", lambda process: None)
+    monkeypatch.setattr(node_health_service, "_free_local_port", lambda: 19000)
+    monkeypatch.setattr(node_health_service.httpx, "Client", FakeClient)
+
+    result = node_health_service.probe_node(
+        NodeProbeTarget(
+            node_id=1,
+            name="UDP 完整检测节点",
+            node_type="hysteria2",
+            server="udp.example.com",
+            port=443,
+            outbound={"type": "hysteria2", "tls": {"enabled": True}},
+        ),
+        5,
+    )
+
+    assert result.status == "healthy"
+    assert result.tcp_status == "not_applicable"
+    assert result.udp_status == "passed"
+    assert result.udp_latency_ms is not None
+
+
+def test_health_diagnostics_explain_network_and_latency_causes() -> None:
+    """健康检测原因应区分线路故障、协议故障和延迟异常。"""
+
+    assert "线路不通" in node_health_service._error_detail(ConnectionRefusedError())
+    assert "TLS/Reality 握手异常" in node_health_service._classify_process_error(
+        "reality handshake failed"
+    )
+    assert "延迟异常" in node_health_service._latency_detail(3000)
+
+
 def test_run_all_only_checks_custom_nodes(
     client, auth_headers: dict[str, str], monkeypatch
 ) -> None:
@@ -260,6 +350,36 @@ def test_run_all_only_checks_custom_nodes(
         upstream = db.get(Node, upstream_id)
         assert custom is not None and custom.health_status == "healthy"
         assert upstream is not None and upstream.health_status == "unknown"
+    finally:
+        db.close()
+
+
+def test_run_all_checks_legacy_external_nodes_without_source_type(
+    client, auth_headers: dict[str, str], monkeypatch
+) -> None:
+    """历史外部节点没有 source_type 时，定时健康检测仍应覆盖它。"""
+
+    node_id = _create_node(client, auth_headers, "209")
+    db = SessionLocal()
+    try:
+        node = db.get(Node, node_id)
+        assert node is not None
+        node.source_type = None
+        node.node_category = "external"
+        for existing in db.scalars(select(Node)).all():
+            if existing.id != node_id:
+                existing.enabled = False
+        db.commit()
+        monkeypatch.setattr(
+            node_health_service,
+            "probe_node",
+            lambda target, timeout: ProbeResult("healthy", "节点服务器可连接", 12),
+        )
+
+        assert NodeHealthService(db).run_all() == 1
+        checked = db.get(Node, node_id)
+        assert checked is not None
+        assert checked.health_status == "healthy"
     finally:
         db.close()
 

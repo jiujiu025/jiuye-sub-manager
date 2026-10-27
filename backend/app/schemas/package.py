@@ -99,6 +99,24 @@ class PackageDetail(PackageSummary):
     pass
 
 
+class PackageLookupItem(BaseModel):
+    """按订阅地址查找套餐时返回的安全摘要。"""
+
+    package_id: int
+    package_name: str
+    subscription_name: str
+    customer_id: int | None = None
+    customer_name: str | None = None
+    manager_username: str | None = None
+    subscription_id: int | None = None
+    match_kind: str
+    token_prefix: str
+    status: str
+    expires_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PackageCustomerUsage(BaseModel):
     """套餐被客户实际开通使用的汇总。"""
 

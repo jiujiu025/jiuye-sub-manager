@@ -37,3 +37,36 @@ def test_scheduler_closes_sync_client_and_database(monkeypatch) -> None:
 
     assert client.closed is True
     assert db.closed is True
+
+
+def test_scheduler_health_checks_include_all_enabled_nodes(monkeypatch) -> None:
+    """定时健康检测必须覆盖上游订阅节点和已转发节点。"""
+
+    db = SimpleNamespace(closed=False)
+    db.close = lambda: setattr(db, "closed", True)
+    calls: list[bool] = []
+
+    class FakeHealthService:
+        def __init__(self, session) -> None:
+            assert session is db
+
+        def run_all(self, *, include_all: bool = False) -> int:
+            calls.append(include_all)
+            return 0
+
+    class FakeLeaseStore:
+        def try_acquire(self, key: str, ttl: int) -> bool:
+            return True
+
+        def release(self, key: str) -> None:
+            pass
+
+    monkeypatch.setattr(scheduler_module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(scheduler_module, "NodeHealthService", FakeHealthService)
+
+    scheduler = scheduler_module.SyncScheduler()
+    scheduler.lease_store = FakeLeaseStore()
+    scheduler.run_health_checks()
+
+    assert calls == [True]
+    assert db.closed is True

@@ -239,6 +239,7 @@ class ThreeXUIService:
             self.db.scalars(
                 select(ForwardTask.listen_port).where(
                     ForwardTask.target_server_id == payload.target_server_id,
+                    ForwardTask.status.in_(("pending", "running", "succeeded")),
                 )
             ).all()
         )
@@ -264,6 +265,7 @@ class ThreeXUIService:
                         listen_port=next_port,
                     ),
                     admin,
+                    auto_port=True,
                 )
             except BusinessError as exc:
                 skipped.append(
@@ -358,7 +360,11 @@ class ThreeXUIService:
         self.cleanup_mapping(mapping, admin)
 
     def create_task(
-        self, payload: ForwardTaskCreate, admin: User
+        self,
+        payload: ForwardTaskCreate,
+        admin: User,
+        *,
+        auto_port: bool | None = None,
     ) -> ForwardTask:
         """校验源节点后入队；HTTP 请求本身不连接目标 3x-ui。"""
 
@@ -410,7 +416,7 @@ class ThreeXUIService:
             forward_mode=payload.forward_mode,
             inbound_remark=payload.inbound_remark.strip() if payload.inbound_remark else None,
             listen_port=payload.listen_port or self._allocate_listen_port(target.id),
-            auto_port=payload.listen_port is None,
+            auto_port=payload.listen_port is None if auto_port is None else auto_port,
             status="pending",
             created_by_user_id=admin.id,
         )
@@ -685,7 +691,8 @@ class ThreeXUIService:
             int(port)
             for port in self.db.scalars(
                 select(ForwardTask.listen_port).where(
-                    ForwardTask.target_server_id == target_server_id
+                    ForwardTask.target_server_id == target_server_id,
+                    ForwardTask.status.in_(("pending", "running", "succeeded")),
                 )
             ).all()
             if port is not None
@@ -764,7 +771,9 @@ class ThreeXUIService:
         self.db.commit()
         self.db.refresh(task)
 
-    def _fail_task(self, task: ForwardTask, message: str, stage: str | None = None) -> None:
+    def _fail_task(
+        self, task: ForwardTask, message: str, stage: str | None = None
+    ) -> None:
         # 任务执行中可能已经写入了未提交的节点或映射，失败时先回滚再保存失败状态。
         self.db.rollback()
         task = self.db.get(ForwardTask, task.id)

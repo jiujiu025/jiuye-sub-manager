@@ -54,6 +54,7 @@ export const resolveNodeCountries = (data = {}) => client.post('/nodes/country/r
 export const resolveNodeCountry = (id, force = false) => client.post(`/nodes/${id}/country/resolve`, null, { params: { force } })
 
 export const listPackages = () => client.get('/packages')
+export const lookupPackages = (query) => client.get('/packages/lookup', { params: { query } })
 export const createPackage = (data) => client.post('/packages', data)
 export const duplicatePackage = (id, data) => client.post(`/packages/${id}/duplicate`, data)
 export const getPackage = (id) => client.get(`/packages/${id}`)

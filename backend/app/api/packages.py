@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin, get_current_admin_or_manager
@@ -14,6 +14,7 @@ from app.schemas.package import (
     PackageCreateResponse,
     PackageDetail,
     PackageDuplicateRequest,
+    PackageLookupItem,
     PackageSubscriptionUrlResponse,
     PackageTokenResponse,
     PackageTokenUpdate,
@@ -68,6 +69,17 @@ def create_package(
         token=token,
         subscription_url=_subscription_url(token),
     )
+
+
+@router.get("/lookup", response_model=list[PackageLookupItem])
+def lookup_packages(
+    query: str = Query(min_length=1, max_length=4096),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin),
+) -> list[PackageLookupItem]:
+    """按订阅链接、Token 或 Token 前缀查找套餐。"""
+
+    return PackageService(db).lookup_by_subscription(query)
 
 
 @router.get("/{package_id}", response_model=PackageDetail)

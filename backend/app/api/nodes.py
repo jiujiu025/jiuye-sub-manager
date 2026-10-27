@@ -42,6 +42,7 @@ def list_nodes(
     source_name: str | None = None,
     node_type: str | None = None,
     country: str | None = None,
+    health_status: Literal["healthy", "degraded", "offline", "unknown", "attention"] | None = None,
     keyword: str | None = None,
     enabled: bool | None = None,
     page: int = 1,
@@ -49,7 +50,7 @@ def list_nodes(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin),
 ) -> Page[NodeSummary]:
-    """分页查询统一节点池，支持来源/类型/地区/关键词筛选。"""
+    """分页查询统一节点池，支持来源/类型/地区/健康状态/关键词筛选。"""
 
     safe_page = max(page, 1)
     safe_page_size = max(1, min(page_size, 100))
@@ -59,6 +60,7 @@ def list_nodes(
         source_name=source_name,
         node_type=node_type,
         country=country,
+        health_status=health_status,
         keyword=keyword,
         enabled=enabled,
         page=safe_page,
@@ -211,6 +213,8 @@ def get_node_health(
         tls_status=node.health_tls_status,
         tcp_latency_ms=node.health_tcp_latency_ms,
         tls_latency_ms=node.health_tls_latency_ms,
+        udp_status=node.health_udp_status,
+        udp_latency_ms=node.health_udp_latency_ms,
     )
 
 
@@ -236,6 +240,8 @@ def check_node_health(
         tls_status=checked.health_tls_status,
         tcp_latency_ms=checked.health_tcp_latency_ms,
         tls_latency_ms=checked.health_tls_latency_ms,
+        udp_status=checked.health_udp_status,
+        udp_latency_ms=checked.health_udp_latency_ms,
     )
 
 

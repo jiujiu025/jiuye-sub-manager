@@ -65,6 +65,46 @@
       </el-radio-group>
     </div>
 
+    <div class="package-lookup-panel surface-card">
+      <div class="package-lookup-copy">
+        <strong>按订阅链接找套餐</strong>
+        <span>支持完整订阅链接、Token 或 Token 前缀，结果只显示安全摘要</span>
+      </div>
+      <el-input
+        v-model="packageLookupQuery"
+        class="package-lookup-input"
+        clearable
+        placeholder="粘贴 https://.../sub/... 或 Token"
+        @keyup.enter="findPackageBySubscription"
+      >
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <el-button type="primary" :loading="packageLookupLoading" @click="findPackageBySubscription">查找套餐</el-button>
+      <el-button v-if="packageLookupSearched" link @click="clearPackageLookup">清除结果</el-button>
+    </div>
+
+    <div v-if="packageLookupSearched" class="package-lookup-results surface-card">
+      <div class="package-lookup-results-head">
+        <strong>查找结果</strong>
+        <span>{{ packageLookupResults.length ? `找到 ${packageLookupResults.length} 条匹配记录` : '未找到匹配套餐' }}</span>
+      </div>
+      <el-table v-if="packageLookupResults.length" :data="packageLookupResults" size="small" empty-text="未找到匹配套餐">
+        <el-table-column label="套餐" min-width="190">
+          <template #default="{ row }">
+            <div class="package-lookup-main"><strong>{{ row.package_name }}</strong><span>{{ row.subscription_name }}</span></div>
+          </template>
+        </el-table-column>
+        <el-table-column label="客户 / 经理" min-width="170">
+          <template #default="{ row }">{{ row.customer_name || '套餐本身' }}<span v-if="row.manager_username" class="lookup-secondary"> · {{ row.manager_username }}</span></template>
+        </el-table-column>
+        <el-table-column label="Token 前缀" width="130"><template #default="{ row }">{{ row.token_prefix }}…</template></el-table-column>
+        <el-table-column label="匹配方式" width="150"><template #default="{ row }">{{ packageLookupKindLabel(row.match_kind) }}</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" :type="row.status === '生效中' ? 'success' : 'warning'">{{ row.status }}</el-tag></template></el-table-column>
+        <el-table-column label="到期时间" width="170"><template #default="{ row }">{{ row.expires_at ? formatTime(row.expires_at) : '长期有效' }}</template></el-table-column>
+        <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openLookupPackage(row)">打开套餐</el-button></template></el-table-column>
+      </el-table>
+    </div>
+
     <div
       v-if="displayMode === 'cards'"
       v-loading="loading"
@@ -665,6 +705,7 @@ import {
   listSources,
   listCustomers,
   createCustomer,
+  lookupPackages,
   previewPackage,
   listUsers,
   regenerateToken,
@@ -698,6 +739,10 @@ const selfNodes = ref([])
 const selfNodeSearch = ref('')
 const resourceFilter = ref('all')
 const searchKeyword = ref('')
+const packageLookupQuery = ref('')
+const packageLookupResults = ref([])
+const packageLookupLoading = ref(false)
+const packageLookupSearched = ref(false)
 const statusFilter = ref('')
 const sortFilter = ref('')
 const displayMode = ref(window.localStorage.getItem('packages-view-mode') || 'cards')
@@ -1344,6 +1389,47 @@ function formatTime(value) {
   return formatApiDate(value)
 }
 
+async function findPackageBySubscription() {
+  const query = packageLookupQuery.value.trim()
+  if (!query) {
+    ElMessage.warning('请输入订阅链接、Token 或 Token 前缀')
+    return
+  }
+  packageLookupLoading.value = true
+  packageLookupSearched.value = true
+  try {
+    const { data } = await lookupPackages(query)
+    packageLookupResults.value = data
+    if (!data.length) ElMessage.warning('未找到匹配套餐')
+  } catch (error) {
+    packageLookupResults.value = []
+    if (error.response?.status === 422) ElMessage.warning('请输入有效的订阅链接或 Token')
+    else ElMessage.error('查找套餐失败')
+  } finally {
+    packageLookupLoading.value = false
+  }
+}
+
+function clearPackageLookup() {
+  packageLookupQuery.value = ''
+  packageLookupResults.value = []
+  packageLookupSearched.value = false
+}
+
+async function openLookupPackage(row) {
+  await openEdit({ id: row.package_id })
+}
+
+function packageLookupKindLabel(value) {
+  return ({
+    package: '套餐 Token',
+    package_prefix: '套餐 Token 前缀',
+    customer_subscription: '客户订阅 Token',
+    customer_subscription_prefix: '客户订阅前缀',
+    customer_subscription_history: '历史 Token'
+  })[value] || '订阅匹配'
+}
+
 let expiryTimer
 
 onMounted(() => {
@@ -1798,9 +1884,69 @@ onUnmounted(() => {
   color: var(--app-text);
 }
 
+.package-lookup-panel,
+.package-lookup-results {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+}
+
+.package-lookup-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 250px;
+}
+
+.package-lookup-copy strong,
+.package-lookup-results-head strong,
+.package-lookup-main strong {
+  color: var(--app-text);
+}
+
+.package-lookup-copy span,
+.package-lookup-results-head span,
+.lookup-secondary,
+.package-lookup-main span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.package-lookup-input {
+  flex: 1;
+}
+
+.package-lookup-results {
+  display: block;
+}
+
+.package-lookup-results-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.package-lookup-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 @media (max-width: 768px) {
   .filter-hint {
     width: 100%;
+  }
+
+  .package-lookup-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .package-lookup-copy {
+    min-width: 0;
   }
 
   .package-view-switch {

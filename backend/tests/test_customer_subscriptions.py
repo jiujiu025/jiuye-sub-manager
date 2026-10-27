@@ -593,6 +593,11 @@ def test_subscription_manager_override_controls_subscription_scope(
     ]
     assert [item["customer_id"] for item in usage] == [customer]
 
+    customers_b = client.get("/api/customers", headers=headers_b)
+    assert customers_b.status_code == 200
+    assert [item["id"] for item in customers_b.json()] == [customer]
+    assert client.get("/api/customers", headers=headers_a).json() == []
+
 
 def test_manager_assignment_rejects_non_manager_and_can_be_cleared(
     client: TestClient, auth_headers: dict[str, str]
@@ -644,6 +649,8 @@ def test_expiry_notifications_are_scoped_and_idempotent(
     assert len(first.json()["items"]) == 1
     notification_id = first.json()["items"][0]["id"]
     assert created.json()["token"] not in first.text
+    assert "北京时间" in first.json()["items"][0]["content"]
+    assert "UTC" not in first.json()["items"][0]["content"]
 
     second = client.get("/api/notifications?kind=subscription_expiry", headers=manager_headers)
     assert second.status_code == 200
@@ -781,6 +788,16 @@ def test_admin_can_lookup_customer_and_legacy_package_by_token_or_url(
     )
     assert found_by_url.status_code == 200
     assert found_by_url.json()["id"] == subscription.json()["id"]
+
+    package_lookup = client.get(
+        "/api/packages/lookup",
+        params={"query": url + "?client=clash"},
+        headers=auth_headers,
+    )
+    assert package_lookup.status_code == 200
+    assert package_lookup.json()[0]["package_id"] == package_id
+    assert package_lookup.json()[0]["customer_name"] == "查找客户"
+    assert token not in package_lookup.text
 
     legacy_lookup = client.post(
         "/api/subscriptions/lookup",

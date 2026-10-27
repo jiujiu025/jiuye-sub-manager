@@ -16,6 +16,7 @@ from app.repositories.log_repo import LogRepository
 from app.repositories.user_repo import UserRepository
 from app.schemas.customer import CustomerCreate, CustomerSummary, CustomerUpdate
 from app.services.notification_writer import create_admin_notifications
+from app.services.manager_scope import subscription_manager_clause
 
 
 def _normalize_datetime(value):
@@ -32,13 +33,13 @@ class CustomerService:
 
     def list(self, manager_user_id: int | None = None) -> list[CustomerSummary]:
         statement = (
-            select(Customer, func.count(CustomerSubscription.id))
+            select(Customer, func.count(func.distinct(CustomerSubscription.id)))
             .outerjoin(CustomerSubscription, CustomerSubscription.customer_id == Customer.id)
             .group_by(Customer.id)
             .order_by(Customer.created_at.desc(), Customer.id.desc())
         )
         if manager_user_id is not None:
-            statement = statement.where(Customer.manager_user_id == manager_user_id)
+            statement = statement.where(subscription_manager_clause(manager_user_id))
         rows = self.db.execute(statement).all()
         return [self.to_summary(customer, count) for customer, count in rows]
 

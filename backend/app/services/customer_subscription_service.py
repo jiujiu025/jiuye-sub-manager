@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import re
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
@@ -33,6 +34,9 @@ from app.services.package_service import normalize_expiration, subscription_url
 from app.services.notification_writer import create_admin_notifications
 from app.services.subscription_state import effective_subscription_status
 from app.services.customer_subscription_lines import ensure_lines
+
+
+DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -439,7 +443,12 @@ class CustomerSubscriptionService:
             item.note = payload.note.strip() or None
 
         self.log_repo.create_admin_log(actor.id, "renew_customer_subscription", "subscription", str(item.id))
-        self._notify_lifecycle(item, "客户订阅已续费", f"客户「{item.customer.name}」的订阅已续费至 {new_expiry.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC。")
+        display_expiry = new_expiry.astimezone(DISPLAY_TIMEZONE)
+        self._notify_lifecycle(
+            item,
+            "客户订阅已续费",
+            f"客户「{item.customer.name}」的订阅已续费至北京时间 {display_expiry.strftime('%Y-%m-%d %H:%M')}。",
+        )
         self.db.commit()
         self.db.refresh(item)
         from app.services.subscription_service import SubscriptionService

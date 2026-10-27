@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_service
@@ -463,6 +463,13 @@ class NodeService:
 
         if not allow_forwarded:
             self._ensure_node_can_delete(node)
+            # 失败任务没有有效远端映射，只保留失败原因到当前请求结束前；删除节点时清理外键引用。
+            self.db.execute(
+                delete(ForwardTask).where(
+                    ForwardTask.source_node_id == node.id,
+                    ForwardTask.status == "failed",
+                )
+            )
         for rule in self.db.scalars(select(PackageRule)).all():
             if not isinstance(rule.node_ids, list):
                 continue
@@ -500,7 +507,10 @@ class NodeService:
 
         task_exists = self.db.scalar(
             select(ForwardTask.id)
-            .where(ForwardTask.source_node_id == node.id)
+            .where(
+                ForwardTask.source_node_id == node.id,
+                ForwardTask.status.in_(("pending", "running", "succeeded")),
+            )
             .limit(1)
         )
         if task_exists is not None:

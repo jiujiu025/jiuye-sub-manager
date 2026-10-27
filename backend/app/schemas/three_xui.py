@@ -134,6 +134,7 @@ class ForwardTaskSummary(BaseModel):
     forward_mode: str
     inbound_remark: str | None
     listen_port: int
+    auto_port: bool
     status: str
     progress: int
     stage: str

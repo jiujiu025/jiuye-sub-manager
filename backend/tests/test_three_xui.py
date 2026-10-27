@@ -709,4 +709,5 @@ def test_batch_forward_allocates_distinct_ports_and_skips_invalid_nodes(
     assert response.status_code == 202
     body = response.json()
     assert [task["listen_port"] for task in body["tasks"]] == [25000, 25001]
+    assert all(task["auto_port"] is True for task in body["tasks"])
     assert body["skipped"] == [{"source_node_id": 999999, "reason": "源节点不存在"}]

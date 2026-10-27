@@ -51,6 +51,15 @@
           <el-option v-for="country in countryOptions" :key="country" :label="country" :value="country" />
         </el-select>
       </el-form-item>
+      <el-form-item label="健康状态">
+        <el-select v-model="filters.health_status" clearable placeholder="全部状态" @change="load">
+          <el-option label="异常线路（异常/离线）" value="attention" />
+          <el-option label="正常" value="healthy" />
+          <el-option label="异常" value="degraded" />
+          <el-option label="离线" value="offline" />
+          <el-option label="待检测" value="unknown" />
+        </el-select>
+      </el-form-item>
       <el-form-item>
         <el-button type="primary" @click="load">查询</el-button>
       </el-form-item>
@@ -114,8 +123,9 @@
           <el-tag v-else :type="healthTagType(row.health_status)">{{ healthLabel(row.health_status) }}</el-tag>
           <small v-if="row.health_latency_ms" class="health-latency">{{ row.health_latency_ms }} ms</small>
           <small class="health-breakdown">
-            TCP {{ probeLabel(row.health_tcp_status) }} · TLS {{ probeLabel(row.health_tls_status) }}
+            TCP {{ probeLabel(row.health_tcp_status) }} · TLS {{ probeLabel(row.health_tls_status) }} · UDP {{ probeLabel(row.health_udp_status) }}
           </small>
+          <small v-if="row.health_detail" class="health-detail">{{ row.health_detail }}</small>
         </template>
       </el-table-column>
       <el-table-column label="凭证" width="130">
@@ -667,7 +677,8 @@ const filters = reactive({
   keyword: '',
   source_name: '',
   node_type: '',
-  country: ''
+  country: '',
+  health_status: ''
 })
 const form = reactive({
   name: '',
@@ -702,6 +713,7 @@ async function load() {
     if (filters.source_name) params.source_name = filters.source_name
     if (filters.node_type) params.node_type = filters.node_type
     if (filters.country) params.country = filters.country
+    if (filters.health_status) params.health_status = filters.health_status
     const { data } = await listNodes(params)
     rows.value = data.items
     total.value = data.total
@@ -1013,7 +1025,9 @@ async function checkHealth(row) {
       health_tcp_status: data.tcp_status,
       health_tls_status: data.tls_status,
       health_tcp_latency_ms: data.tcp_latency_ms,
-      health_tls_latency_ms: data.tls_latency_ms
+      health_tls_latency_ms: data.tls_latency_ms,
+      health_udp_status: data.udp_status,
+      health_udp_latency_ms: data.udp_latency_ms
     })
     ElMessage.success(`检测完成：${healthLabel(data.status)}${data.detail ? `，${data.detail}` : ''}`)
   } finally {
@@ -1235,6 +1249,18 @@ function probeLabel(value) {
   margin-top: 2px;
   color: var(--app-text-muted);
   font-size: 10px;
+}
+
+.health-detail {
+  display: block;
+  max-width: 240px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .forward-endpoint {

@@ -30,6 +30,55 @@ def test_packages_require_auth(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_package_lookup_accepts_subscription_url_and_token_prefix(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """管理员可以用完整链接、带参数链接和 Token 前缀找回套餐。"""
+
+    created = client.post(
+        "/api/packages",
+        json={"name": "链接查找套餐"},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    package = created.json()
+    token = package["token"]
+    url = package["subscription_url"]
+
+    by_url = client.get(
+        "/api/packages/lookup",
+        params={"query": f"  {url}?client=clash  "},
+        headers=auth_headers,
+    )
+    assert by_url.status_code == 200
+    assert by_url.json()[0]["package_id"] == package["id"]
+    assert by_url.json()[0]["match_kind"] == "package"
+    assert token not in by_url.text
+
+    by_prefix = client.get(
+        "/api/packages/lookup",
+        params={"query": token[:6]},
+        headers=auth_headers,
+    )
+    assert by_prefix.status_code == 200
+    assert any(item["package_id"] == package["id"] for item in by_prefix.json())
+
+    no_match = client.get(
+        "/api/packages/lookup",
+        params={"query": "not-a-real-token-prefix"},
+        headers=auth_headers,
+    )
+    assert no_match.status_code == 200
+    assert no_match.json() == []
+
+
+def test_package_lookup_requires_admin(client: TestClient) -> None:
+    """套餐链接查找不能被未登录请求访问。"""
+
+    response = client.get("/api/packages/lookup", params={"query": "abcd"})
+    assert response.status_code == 401
+
+
 def test_package_crud_and_token(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:

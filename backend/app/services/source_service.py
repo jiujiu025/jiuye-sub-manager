@@ -6,12 +6,13 @@ import ipaddress
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BusinessError
 from app.models.source import Source
 from app.models.package import PackageRule
+from app.models.three_xui import ForwardTask, ForwardedNodeMapping
 from app.models.user import User
 from app.repositories.log_repo import LogRepository
 from app.repositories.node_repo import NodeRepository
@@ -140,6 +141,37 @@ class SourceService:
 
     def delete(self, source: Source, admin: User) -> None:
         old_node_ids = {node.id for node in self.node_repo.list_by_source(source.id)}
+        if old_node_ids:
+            mapping_exists = self.db.scalar(
+                select(ForwardedNodeMapping.id)
+                .where(ForwardedNodeMapping.source_node_id.in_(old_node_ids))
+                .limit(1)
+            )
+            if mapping_exists is not None:
+                raise BusinessError(
+                    "该订阅源仍有 3x-ui 转发映射，请先解除转发映射后再删除",
+                    status_code=409,
+                )
+            active_task_exists = self.db.scalar(
+                select(ForwardTask.id)
+                .where(
+                    ForwardTask.source_node_id.in_(old_node_ids),
+                    ForwardTask.status.in_(("pending", "running", "succeeded")),
+                )
+                .limit(1)
+            )
+            if active_task_exists is not None:
+                raise BusinessError(
+                    "该订阅源仍有待处理或已完成的 3x-ui 转发任务，请先处理后再删除",
+                    status_code=409,
+                )
+            # 失败任务没有有效映射时仅作为执行记录，删除源节点前清理其外键引用。
+            self.db.execute(
+                delete(ForwardTask).where(
+                    ForwardTask.source_node_id.in_(old_node_ids),
+                    ForwardTask.status == "failed",
+                )
+            )
         affected_package_ids = SubscriptionService.affected_package_ids_for_source(
             self.db, source.name, old_node_ids, set()
         )
