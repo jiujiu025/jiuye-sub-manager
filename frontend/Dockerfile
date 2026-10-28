@@ -4,7 +4,11 @@ FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund --progress=false
+RUN npm ci --no-audit --no-fund --progress=false \
+    --registry=https://registry.npmjs.org \
+    --replace-registry-host=always \
+    --fetch-retries=3 \
+    --fetch-timeout=120000
 
 COPY frontend/ ./
 RUN npm run build
