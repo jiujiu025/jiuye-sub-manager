@@ -1,9 +1,10 @@
-FROM node:22-alpine AS builder
+# 固定 Node 20 构建环境，避免 Node 22 Alpine 中 npm ci 的内部退出异常。
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund --progress=false
 
 COPY frontend/ ./
 RUN npm run build
